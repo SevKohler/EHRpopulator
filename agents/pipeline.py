@@ -86,92 +86,109 @@ class Pipeline:
 
     def run(
         self,
-        template_path: Path,
+        template_paths: list[Path],
         format: ResourceFormat,
         count: int = 1,
-        demographic_context: str = "general adult patients",
+        scenario: str = "general adult patients",
         upload: bool = False,
-        opt_xml: str | None = None,
-        structure_def_json: str | None = None,
         ig_path: str | None = None,
     ) -> list[GeneratedResource]:
 
-        template_content = template_path.read_text(encoding="utf-8")
-        template_type = _detect_template_type(template_path)
+        # Step 1: Load and analyze all templates
+        # Each entry: (analysis, opt_xml_or_None, struct_def_or_None)
+        template_infos: list[tuple[TemplateAnalysis, str | None, str | None]] = []
 
-        # OPT XML → convert to web template via the Java validator service.
-        # The validator uses the EHRbase SDK (opt-normalizer + web-template) to do
-        # this locally — no running EHRbase server needed. The web template contains
-        # flat paths, constraints, inline code lists, descriptions and annotations
-        # which the downstream agents use directly.
-        if template_type == TemplateType.OPENEHR_OPT:
-            console.print("  Converting OPT → web template via validator service...")
-            web_template = self._opt_to_web_template(template_content)
-            if web_template:
+        for template_path in template_paths:
+            template_content = template_path.read_text(encoding="utf-8")
+            template_type = _detect_template_type(template_path)
+            opt_xml: str | None = None
+            struct_def: str | None = None
+
+            if template_type == TemplateType.OPENEHR_OPT:
+                console.print(f"  Converting [cyan]{template_path.name}[/cyan] → web template...")
+                web_template = self._opt_to_web_template(template_content)
+                if not web_template:
+                    raise RuntimeError(
+                        f"OPT conversion failed for {template_path.name}. "
+                        f"Start the validator: cd validator && mvn spring-boot:run"
+                    )
+                opt_xml = template_content
                 template_content = web_template
                 template_type = TemplateType.OPENEHR_WEB_TEMPLATE
-            else:
-                console.print(
-                    "  [red]Could not convert OPT to web template.[/red] "
-                    "Is the validator running at {self.validator_url}?"
-                )
-                raise RuntimeError(
-                    f"OPT conversion failed. Start the validator service first:\n"
-                    f"  cd validator && mvn spring-boot:run"
-                )
 
-        # Step 1: Analyze template (programmatic for web template / StructureDefinition,
-        # LLM fallback only for raw OPT XML)
-        console.print(f"[bold]Analyzing template:[/bold] {template_path.name}")
-        with console.status("Analyzing template structure..."):
-            analysis = self.template_analyzer.analyze(template_content, template_type)
+            elif template_type == TemplateType.FHIR_STRUCTURE_DEF:
+                struct_def = template_content
 
-        # Step 1b: Load IG context for FHIR profiles
-        if ig_path and template_type == TemplateType.FHIR_STRUCTURE_DEF:
-            console.print(f"  Loading IG context from: [cyan]{ig_path}[/cyan]")
-            with console.status("Loading Implementation Guide..."):
-                from template_parser import load_ig_context
-                analysis.ig_context = load_ig_context(ig_path)
-            vs_count = len(analysis.ig_context.value_sets)
-            cs_count = len(analysis.ig_context.code_systems)
-            console.print(f"  IG: [cyan]{analysis.ig_context.ig_name}[/cyan] "
-                          f"({vs_count} ValueSets, {cs_count} CodeSystems)")
+            console.print(f"[bold]Analyzing:[/bold] {template_path.name}")
+            with console.status("Parsing template structure..."):
+                analysis = self.template_analyzer.analyze(template_content, template_type)
 
-        console.print(f"  Template: [cyan]{analysis.name}[/cyan] "
-                      f"({len(analysis.required_elements)} required, "
-                      f"{len(analysis.optional_elements)} optional elements)")
+            if ig_path and template_type == TemplateType.FHIR_STRUCTURE_DEF:
+                console.print(f"  Loading IG from: [cyan]{ig_path}[/cyan]")
+                with console.status("Loading Implementation Guide..."):
+                    from template_parser import load_ig_context
+                    analysis.ig_context = load_ig_context(ig_path)
+                console.print(f"  IG: [cyan]{analysis.ig_context.ig_name}[/cyan] "
+                              f"({len(analysis.ig_context.value_sets)} ValueSets)")
+
+            console.print(f"  [cyan]{analysis.name}[/cyan] — "
+                          f"{len(analysis.required_elements)} required, "
+                          f"{len(analysis.optional_elements)} optional elements")
+            template_infos.append((analysis, opt_xml, struct_def))
+
+        analyses = [a for a, _, _ in template_infos]
 
         results: list[GeneratedResource] = []
+        total = count * len(analyses)
+
+        # Wipe and recreate journey debug folder (keep max 10 samples)
+        journey_dir = self.output_dir / "journeys"
+        if journey_dir.exists():
+            import shutil
+            shutil.rmtree(journey_dir)
+        journey_dir.mkdir(parents=True)
+        JOURNEY_SAMPLE_LIMIT = 10
 
         with Progress(SpinnerColumn(), TextColumn("{task.description}"),
                       console=console) as progress:
-            task = progress.add_task(f"Generating {count} patient record(s)...", total=count)
+            task = progress.add_task(f"Generating {count} patient(s) × {len(analyses)} template(s)...",
+                                     total=total)
 
             for i in range(count):
                 progress.update(task, description=f"Patient {i+1}/{count}: generating journey...")
 
-                # Step 2: Generate patient journey
+                # Step 2: Generate one patient journey covering ALL templates
                 journey = self.journey_generator.generate(
-                    analysis, demographic_context, patient_index=i)
+                    analyses=analyses,
+                    scenario=scenario,
+                    patient_index=i,
+                )
 
-                # Step 3 + 4: Compose with validation loop
-                progress.update(task, description=f"Patient {i+1}/{count}: composing {format.value}...")
-                resource = self._compose_with_validation(
-                    journey, analysis, format, opt_xml, structure_def_json)
+                # Save journey for inspection (up to JOURNEY_SAMPLE_LIMIT)
+                if i < JOURNEY_SAMPLE_LIMIT:
+                    (journey_dir / f"journey_{i+1}_{journey.patient_id}.json").write_text(
+                        journey.model_dump_json(indent=2), encoding="utf-8"
+                    )
 
-                results.append(resource)
-                self._save(resource, i)
+                # Step 3+4: Compose + validate for each template
+                for analysis, opt_xml, struct_def in template_infos:
 
-                # Step 5: Upload
-                if upload:
-                    progress.update(task, description=f"Patient {i+1}/{count}: uploading...")
-                    self._upload(resource)
+                    progress.update(task,
+                        description=f"Patient {i+1}/{count}: composing {analysis.name} ({format.value})...")
+                    resource = self._compose_with_validation(
+                        journey, analysis, format, opt_xml, struct_def)
 
-                progress.advance(task)
+                    results.append(resource)
+                    self._save(resource, i)
 
-        # Summary
+                    if upload:
+                        progress.update(task, description=f"Patient {i+1}/{count}: uploading...")
+                        self._upload(resource)
+
+                    progress.advance(task)
+
         valid_count = sum(1 for r in results if r.valid)
-        console.print(f"\n[bold]Done.[/bold] {valid_count}/{count} records valid. "
+        console.print(f"\n[bold]Done.[/bold] {valid_count}/{total} compositions valid. "
                       f"Output: {self.output_dir}")
         return results
 
@@ -199,7 +216,7 @@ class Pipeline:
             result = self._validate(raw, format, opt_xml, structure_def_json)
 
             resource = GeneratedResource(
-                patient_id=journey.demographics.patient_id,
+                patient_id=journey.patient_id,
                 template_id=analysis.template_id,
                 format=format,
                 content=raw,

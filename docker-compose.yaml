@@ -19,6 +19,7 @@ services:
       POSTGRES_DB: ehrbase
     volumes:
       - ehrbase-db-data:/var/lib/postgresql/data
+      - ./ehrbase-db-init:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ehrbase"]
       interval: 5s
@@ -36,6 +37,8 @@ services:
       DB_URL: jdbc:postgresql://ehrbase-db:5432/ehrbase
       DB_USER: ehrbase
       DB_PASS: ehrbase
+      DB_USER_ADMIN: ehrbase
+      DB_PASS_ADMIN: ehrbase
       SERVER_NODENAME: local.ehrbase.org
       SECURITY_AUTHTYPE: BASIC
       SECURITY_AUTHUSER: ehrbase-user
@@ -43,10 +46,11 @@ services:
       SECURITY_AUTHADMINUSER: ehrbase-admin
       SECURITY_AUTHADMINPASSWORD: EvenMoreSecretPassword
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/ehrbase/rest/status"]
-      interval: 10s
+      test: ["CMD", "wget", "-qO-", "--header=Authorization: Basic ZWhyYmFzZS11c2VyOlN1cGVyU2VjcmV0UGFzc3dvcmQ=", "http://localhost:8080/ehrbase/rest/openehr/v1/definition/template/adl1.4"]
+      interval: 5s
       timeout: 5s
-      retries: 20
+      retries: 60
+      start_period: 30s
 
   # -------------------------------------------------------------------------
   # HAPI FHIR Server — FHIR R4
@@ -96,7 +100,7 @@ services:
         condition: service_healthy
     ports:
       - "8085:8080"
-    command: --elasticsearch.urls=http://snowstorm-es:9200
+    entrypoint: java -Xms2g -Xmx4g --add-opens java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED -cp @/app/jib-classpath-file org.snomed.snowstorm.SnowstormApplication --elasticsearch.urls=http://snowstorm-es:9200
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/branches"]
       interval: 15s

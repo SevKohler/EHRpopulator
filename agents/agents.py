@@ -16,8 +16,7 @@ import re
 from typing import Callable, Any
 
 from models import (
-    TemplateAnalysis, TemplateType, PatientJourney,
-    DataElement, PatientDemographics, ClinicalEvent,
+    TemplateAnalysis, TemplateType, PatientJourney, DataElement,
 )
 from template_parser import parse_web_template, parse_structure_definition
 from tools import TerminologyTools, EHRbaseTools
@@ -29,80 +28,77 @@ from tools import TerminologyTools, EHRbaseTools
 
 
 JOURNEY_GENERATOR_SYSTEM = """
-You are a clinical data expert generating realistic synthetic patient journeys
-for healthcare system testing. Journeys must be:
+You are a clinical expert generating synthetic patient data for healthcare system testing.
 
-1. Medically realistic and internally consistent
-2. Specific — include exact values (not placeholders): dates, numeric measurements, real codes
-3. Diverse — vary demographics, severity, and clinical presentations between patients
-4. Complete — cover all data points listed in the template structure
-5. Safe — fictional patients only, no real patient data
+You receive a list of clinical templates (openEHR OPTs or FHIR StructureDefinitions) with their
+exact field paths and types. Your job is to generate realistic patient data AND map it directly
+onto those paths — so the downstream composition step only needs to validate terminology codes
+and wrap values in format-specific types.
 
-Use real medical terminology:
-- ICD-10 codes for diagnoses (e.g., E11.9 for type 2 diabetes)
-- SNOMED CT display terms for findings and procedures
-- LOINC names for lab tests and observations
-- Drug names from standard formularies
+RULES:
+1. Follow the scenario description — it defines the patient type and clinical focus
+2. Be specific: exact dates (ISO 8601), numeric values with UCUM units, real terminology codes
+3. Every required path must have a value in field_values
+4. For coded fields use the display term as value (e.g. "Type 2 diabetes mellitus") — the
+   composer will look up and validate the actual code via the terminology server
+5. For quantity fields use a plain number; put the unit in the companion |unit or |units path
+6. For datetime fields use ISO 8601 (e.g. "2024-03-15T09:30:00+01:00")
+7. Vary the patient — different age, gender, severity, comorbidities each time
+8. Fictional patients only
 
-Output valid JSON with this structure:
+Output valid JSON with exactly this structure:
 {
-  "demographics": {
-    "patient_id": "string",
-    "age": number,
-    "gender": "male | female | other",
-    "relevant_history": "string"
-  },
-  "events": [
-    {
-      "timestamp": "ISO 8601 datetime",
-      "event_type": "string",
-      "description": "string",
-      "data_points": {
-        "field_name": "value"
-      }
-    }
-  ],
-  "narrative_summary": "string"
+  "patient_id": "PAT-001",
+  "age": 54,
+  "gender": "female",
+  "narrative": "Brief clinical summary for context.",
+  "field_values": {
+    "path/to/field|magnitude": 38.5,
+    "path/to/field|unit": "Cel",
+    "path/to/coded_field|value": "Hypertension",
+    "path/to/coded_field|terminology": "SNOMED-CT",
+    "path/to/datetime_field": "2024-03-15T09:30:00+01:00"
+  }
 }
 
-Generate realistic timestamps in chronological order.
-Include specific numeric values with units for all measurements.
-Do not include any explanation text outside the JSON.
+Use the exact paths from the template field list below — copy them verbatim into field_values.
+Do not include any text outside the JSON.
 """.strip()
 
 
 RESOURCE_COMPOSER_SYSTEM = """
-You are an expert in serializing clinical data to valid openEHR compositions
-and FHIR R4 resources. You have access to tools to look up valid terminology codes.
+You are an expert in serializing pre-mapped clinical data into valid openEHR compositions
+and FHIR R4 resources. You have access to terminology tools to validate and expand coded values.
 
-RULES:
-1. ALWAYS call terminology tools before populating coded fields — never invent codes
-2. Use real standard codes: SNOMED CT, LOINC, ICD-10, UCUM units
-3. Populate ALL required elements from the template structure
-4. Respect exact data types and paths from the template analysis
-5. Return ONLY the JSON — no markdown fences, no explanation text
+The patient journey already contains field_values — a dict mapping each template path to a value.
+Your job is to:
+1. Use the terminology tools to look up correct codes for any coded fields (never invent codes)
+2. Wrap each value in the correct format-specific type
+3. Add required structural metadata
+4. Return ONLY the final JSON — no markdown fences, no explanation
 
 For openEHR FLAT JSON:
-- Use exact flat paths from the template (e.g., vitals/body_temperature:0/any_event:0/temperature|magnitude)
-- Include ctx/template_id, ctx/language, ctx/territory, ctx/time
-- Use UCUM for units: Cel (not °C), mm[Hg], kg, cm, /min, /s
+- Copy paths and values from field_values directly
+- Add ctx/template_id, ctx/language ("en"), ctx/territory ("US"), ctx/time
+- For coded fields: look up the code via terminology tools, then set both |value and |code and |terminology
+- For quantities: use |magnitude and |unit paths
+- Use UCUM units: Cel, mm[Hg], kg, cm, /min, g/dL
 
 For openEHR CANONICAL JSON:
+- Map field_values paths back to the nested RM structure
+- Use DV_CODED_TEXT with defining_code.code_string and terminology_id.value
+- Use DV_QUANTITY with magnitude and units
 - Include archetype_details with template_id and archetype_id
-- Use correct DV_* types: DV_CODED_TEXT with defining_code, DV_QUANTITY with magnitude+units
-- Include proper language and territory objects
 
 For FHIR R4 JSON:
-- Set correct resourceType
-- Include meta.profile if a profile URL was provided
+- Map field_values FHIRPaths to the correct resource structure
 - Use full coding objects: {"system": "...", "code": "...", "display": "..."}
-- Status fields are required: use appropriate values (final, active, etc.)
-- Include subject reference for patient-linked resources
+- Look up codes via terminology tools before using them
+- Include required fields: resourceType, status, subject, etc.
 
 When validation errors are provided from a previous attempt:
-- Read each error carefully with its path location
-- Fix the specific error at that path
-- Do not change parts of the resource that were not flagged
+- Fix only the paths listed in the errors
+- Do not change anything else
 """.strip()
 
 
@@ -161,28 +157,33 @@ class JourneyGeneratorAgent:
 
     def generate(
         self,
-        analysis: TemplateAnalysis,
-        demographic_context: str = "general adult patients",
+        analyses: list[TemplateAnalysis],
+        scenario: str = "general adult patients",
         patient_index: int = 0,
     ) -> PatientJourney:
-        user_msg = f"""
-Generate a realistic synthetic patient journey for patient #{patient_index + 1}.
-Patient population context: {demographic_context}
-
-The journey must provide clinical data for ALL of these template elements:
-
-REQUIRED ELEMENTS:
-{_format_elements(analysis.required_elements)}
-
-OPTIONAL ELEMENTS (include where clinically relevant):
-{_format_elements(analysis.optional_elements)}
-
-Template: {analysis.name} ({analysis.template_id})
+        templates_section = ""
+        for analysis in analyses:
+            templates_section += f"""
+TEMPLATE: {analysis.name} (ID: {analysis.template_id})
 Clinical concepts: {', '.join(analysis.clinical_concepts)}
-Notes: {analysis.notes}
+{f'Notes: {analysis.notes}' if analysis.notes else ''}
+Required fields — the narrative MUST contain specific values for each of these:
+{_format_elements(analysis.required_elements)}
+Optional fields — include where clinically appropriate:
+{_format_elements(analysis.optional_elements)}
+""".strip() + "\n\n"
 
-Generate a unique, realistic patient — vary age, gender, severity, and presentation.
-Ensure all required elements have specific values that can be directly used in the composition.
+        user_msg = f"""
+Generate patient data for patient #{patient_index + 1}.
+
+SCENARIO (defines the patient type — follow closely):
+{scenario}
+
+Map values onto all required paths from these templates. Include each path verbatim in field_values:
+
+{templates_section.strip()}
+
+Make this patient unique — vary age, gender, severity, comorbidities, and clinical course.
 """.strip()
 
         raw = self.llm(JOURNEY_GENERATOR_SYSTEM, user_msg)
@@ -262,8 +263,11 @@ OPTIONAL PATHS (include where data is available):
 {_format_elements(analysis.optional_elements)}
 
 {ig_section}
-PATIENT JOURNEY:
-{journey.model_dump_json(indent=2)}
+PATIENT: {journey.patient_id}, age {journey.age}, {journey.gender}
+SUMMARY: {journey.narrative}
+
+PRE-MAPPED FIELD VALUES (use these directly — look up codes for coded fields):
+{json.dumps(journey.field_values, indent=2)}
 
 {error_section}
 Use the terminology tools to look up correct codes before populating coded fields.

@@ -90,26 +90,22 @@ class TemplateAnalysis(BaseModel):
     ig_context: IgContext | None = None
 
 
-class ClinicalEvent(BaseModel):
-    """A single event in a patient journey."""
-    timestamp: str                         # ISO 8601
-    event_type: str                        # e.g. "vital_signs", "diagnosis", "medication"
-    description: str
-    data_points: dict[str, Any] = Field(default_factory=dict)  # field name -> value
+class PatientJourney(BaseModel):
+    """
+    A realistic patient journey, produced by the JourneyGeneratorAgent.
 
-
-class PatientDemographics(BaseModel):
+    field_values maps each template path directly to a clinical value — the
+    journey generator does the path annotation so the composer only needs to
+    validate/expand terminology codes and serialize to the target format.
+    """
     patient_id: str
     age: int
     gender: str
-    relevant_history: str = ""
-
-
-class PatientJourney(BaseModel):
-    """A realistic patient journey, produced by the JourneyGeneratorAgent."""
-    demographics: PatientDemographics
-    events: list[ClinicalEvent] = Field(default_factory=list)
-    narrative_summary: str = ""
+    narrative: str                              # Brief clinical context / summary
+    field_values: dict[str, Any] = Field(       # template path → raw value
+        default_factory=dict,
+        description="Maps each flat path or FHIRPath to its value for this patient"
+    )
 
 
 class ValidationIssue(BaseModel):

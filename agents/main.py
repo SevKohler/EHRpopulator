@@ -75,14 +75,105 @@ def _resolve_env(obj):
 # ---------------------------------------------------------------------------
 
 @app.command()
+def run(
+    config_path: Annotated[Optional[Path], typer.Option("--config", "-c")] = None,
+    output_dir: Annotated[Optional[Path], typer.Option("--output", "-o")] = None,
+):
+    """Interactive mode — asks what you want and generates accordingly.
+
+    Run with no arguments to start:
+      python main.py run
+    """
+    console.print("\n[bold cyan]EHR Populator[/bold cyan] — Interactive Generator\n")
+
+    # 1. Collect template files
+    console.print("Enter the path(s) to your OPT or FHIR StructureDefinition file(s).")
+    console.print("  [dim]Tip: you can enter multiple files, one per line. Press Enter twice when done.[/dim]")
+    template_paths: list[Path] = []
+    while True:
+        raw = typer.prompt("  Template file", default="").strip()
+        if not raw:
+            if template_paths:
+                break
+            console.print("  [red]Please enter at least one template file.[/red]")
+            continue
+        p = Path(raw)
+        if not p.exists():
+            console.print(f"  [red]File not found:[/red] {p}")
+            continue
+        template_paths.append(p)
+        console.print(f"  [green]Added:[/green] {p.name}  (press Enter again to continue, or add another)")
+
+    # 2. Format
+    console.print("\nOutput format:")
+    console.print("  [bold]1[/bold]  OPENEHR_FLAT       (flat JSON for EHRbase)")
+    console.print("  [bold]2[/bold]  OPENEHR_CANONICAL  (canonical openEHR JSON)")
+    console.print("  [bold]3[/bold]  FHIR_R4            (FHIR R4 JSON)")
+    fmt_choice = typer.prompt("  Choice", default="1").strip()
+    fmt_map = {
+        "1": ResourceFormat.OPENEHR_FLAT,
+        "2": ResourceFormat.OPENEHR_CANONICAL,
+        "3": ResourceFormat.FHIR_R4,
+        "OPENEHR_FLAT": ResourceFormat.OPENEHR_FLAT,
+        "OPENEHR_CANONICAL": ResourceFormat.OPENEHR_CANONICAL,
+        "FHIR_R4": ResourceFormat.FHIR_R4,
+    }
+    format = fmt_map.get(fmt_choice, ResourceFormat.OPENEHR_FLAT)
+
+    # 3. Count
+    count = typer.prompt("\nHow many patients to generate", default="1")
+    try:
+        count = int(count)
+    except ValueError:
+        count = 1
+
+    # 4. Scenario
+    console.print("\nDescribe the patients / clinical scenario you want to generate.")
+    console.print("  [dim]Examples: 'elderly patients with COPD and type 2 diabetes'[/dim]")
+    console.print("  [dim]          'rare metabolic disease, focus on lysosomal storage disorders'[/dim]")
+    console.print("  [dim]          'post-operative ICU patients with sepsis complications'[/dim]")
+    scenario = typer.prompt("  Scenario").strip() or "general adult patients"
+
+    # 5. Upload
+    upload = typer.confirm("\nUpload results to configured servers?", default=False)
+
+    console.print()
+
+    # Run
+    config = load_config(config_path)
+    if output_dir:
+        config.setdefault("pipeline", {})["output_dir"] = str(output_dir)
+
+    pipeline = Pipeline(config)
+    results = pipeline.run(
+        template_paths=template_paths,
+        format=format,
+        count=count,
+        scenario=scenario,
+        upload=upload,
+    )
+
+    table = Table(title="Generation Results")
+    table.add_column("Patient")
+    table.add_column("Template")
+    table.add_column("Attempts")
+    table.add_column("Valid")
+    table.add_column("Issues")
+    for r in results:
+        valid_str = "[green]✓[/green]" if r.valid else "[red]✗[/red]"
+        table.add_row(r.patient_id, r.template_id, str(r.generation_attempt),
+                      valid_str, str(len(r.validation_issues)))
+    console.print(table)
+
+@app.command()
 def generate(
-    template: Annotated[Path, typer.Argument(help="OPT (.opt/.xml) or StructureDefinition (.json) file")],
+    templates: Annotated[list[Path], typer.Argument(help="One or more OPT (.opt/.xml) or StructureDefinition (.json) files")],
+    scenario: Annotated[str, typer.Option("--scenario", "-s",
+        help="Describe what you want to generate, e.g. 'diabetic patients with hypertension and CKD stage 3'")] = "general adult patients",
     format: Annotated[ResourceFormat, typer.Option("--format", "-f",
-        help="Output format")] = ResourceFormat.FHIR_R4,
+        help="Output format")] = ResourceFormat.OPENEHR_FLAT,
     count: Annotated[int, typer.Option("--count", "-n",
-        help="Number of patient records to generate")] = 1,
-    demographic_context: Annotated[str, typer.Option("--demographic-context", "-d",
-        help="Patient population description")] = "general adult patients",
+        help="Number of patients to generate")] = 1,
     upload: Annotated[bool, typer.Option("--upload",
         help="Upload generated resources to configured servers")] = False,
     ig: Annotated[Optional[str], typer.Option("--ig",
@@ -90,17 +181,21 @@ def generate(
     config_path: Annotated[Optional[Path], typer.Option("--config", "-c")] = None,
     output_dir: Annotated[Optional[Path], typer.Option("--output", "-o")] = None,
 ):
-    """Generate synthetic clinical data from a template.
+    """Generate synthetic clinical data from one or more templates.
 
-    For openEHR: provide an OPT file (.opt / .xml) — the validator service converts
-    it to a web template automatically before analysis.
+    Describe what you want via --scenario and provide OPT or StructureDefinition files.
+    When multiple templates are given, one composition per template is generated per patient,
+    all sharing the same patient journey.
 
-    For FHIR: provide a StructureDefinition (.json). Optionally pass --ig with your
-    Implementation Guide package for richer ValueSet and population context.
+    Examples:
+      python main.py generate vital_signs.opt --scenario "elderly patients with COPD" --count 5
+      python main.py generate vitals.opt labs.opt --scenario "post-operative ICU patients" -n 3
+      python main.py generate obs.json --format FHIR_R4 --scenario "pregnant women, third trimester"
     """
-    if not template.exists():
-        console.print(f"[red]Template file not found:[/red] {template}")
-        raise typer.Exit(1)
+    for t in templates:
+        if not t.exists():
+            console.print(f"[red]Template file not found:[/red] {t}")
+            raise typer.Exit(1)
 
     config = load_config(config_path)
     if output_dir:
@@ -108,10 +203,10 @@ def generate(
 
     pipeline = Pipeline(config)
     results = pipeline.run(
-        template_path=template,
+        template_paths=templates,
         format=format,
         count=count,
-        demographic_context=demographic_context,
+        scenario=scenario,
         upload=upload,
         ig_path=ig,
     )
@@ -119,6 +214,7 @@ def generate(
     # Print result table
     table = Table(title="Generation Results")
     table.add_column("Patient")
+    table.add_column("Template")
     table.add_column("Attempts")
     table.add_column("Valid")
     table.add_column("Issues")
@@ -127,6 +223,7 @@ def generate(
         valid_str = "[green]✓[/green]" if r.valid else "[red]✗[/red]"
         table.add_row(
             r.patient_id,
+            r.template_id,
             str(r.generation_attempt),
             valid_str,
             str(len(r.validation_issues)),
