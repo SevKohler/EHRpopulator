@@ -46,6 +46,15 @@ RULES:
 7. Vary the patient — different age, gender, severity, comorbidities each time
 8. Fictional patients only
 
+openEHR RM FIELDS — include these in field_values for every openEHR template:
+  context/start_time         When the clinical encounter started (ISO 8601)
+  context/end_time           When it ended (ISO 8601, optional, omit for outpatient snap)
+  composer/name              Name of the treating/authoring clinician (e.g. "Dr. Maria Schmidt")
+  context/setting|value      Clinical setting: "primary medical care", "secondary medical care",
+                             "home", "other care" — pick what fits the scenario
+  context/health_care_facility|name   Name of the hospital or clinic (make it realistic)
+These are RM-level and exist in every composition regardless of what the template defines.
+
 Output valid JSON with exactly this structure:
 {
   "patient_id": "PAT-001",
@@ -77,18 +86,65 @@ Your job is to:
 3. Add required structural metadata
 4. Return ONLY the final JSON — no markdown fences, no explanation
 
+═══════════════════════════════════════════════════════════
+openEHR REFERENCE MODEL (RM) — FIELD SEMANTICS
+═══════════════════════════════════════════════════════════
+Every openEHR composition has RM-level metadata fields. Know what they mean:
+
+COMPOSITION-LEVEL:
+  composer/name              The clinician who authored this composition (e.g. "Dr. Anna Müller")
+                             NOT the patient. Use the treating physician from the narrative.
+  language/code_string       ISO 639-1 language code: "en", "de", "fr" — matches the data language
+  language/terminology_id    Always "ISO_639-1"
+  territory/code_string      ISO 3166-1 alpha-2 country: "DE", "US", "GB", "AT", "CH" etc.
+  territory/terminology_id   Always "ISO_3166-1"
+  category                   openehr::433|event|   → for encounters, observations, measurements
+                             openehr::431|persistent| → for ongoing records (problem list, medication list)
+                             openehr::432|episodic|  → for episodic records (discharge summaries)
+
+EVENT CONTEXT (present when category = event):
+  context/start_time         ISO 8601 datetime when the clinical encounter/event STARTED
+                             (e.g. when the patient arrived, when the measurement was taken)
+  context/end_time           ISO 8601 datetime when the encounter ENDED (optional)
+  context/setting            openehr::225|home|  238|other care|  227|primary medical care|
+                             229|secondary medical care|  230|secondary nursing care|
+  context/health_care_facility/name   Name of the hospital/clinic where this occurred
+
+SUBJECT (who the data is about — usually the patient):
+  subject/_type              "PARTY_SELF" (the EHR owner, i.e. the patient)
+
+TIME FIELDS:
+  Any path ending in /time or /date_time   → ISO 8601 (e.g. "2024-03-15T09:30:00+02:00")
+  Use times consistent with context/start_time and the patient narrative.
+  Do NOT use future dates relative to the encounter.
+
+FLAT JSON ctx shortcuts (openEHR flat format only):
+  ctx/template_id            The template ID string
+  ctx/language               "en" (or appropriate ISO 639-1 code)
+  ctx/territory              "US" (or appropriate ISO 3166-1 code)
+  ctx/time                   Composition creation time (ISO 8601)
+  ctx/composer_name          The authoring clinician's name
+  ctx/health_care_facility_name   Facility name
+  ctx/id_scheme              "local"
+  ctx/id_namespace           "local"
+
+═══════════════════════════════════════════════════════════
+FORMAT RULES
+═══════════════════════════════════════════════════════════
+
 For openEHR FLAT JSON:
 - Copy paths and values from field_values directly
-- Add ctx/template_id, ctx/language ("en"), ctx/territory ("US"), ctx/time
-- For coded fields: look up the code via terminology tools, then set both |value and |code and |terminology
-- For quantities: use |magnitude and |unit paths
-- Use UCUM units: Cel, mm[Hg], kg, cm, /min, g/dL
+- Add all ctx/* fields described above
+- Coded fields: look up code → set |value, |code, |terminology
+- Quantities: |magnitude (number) and |unit (UCUM: Cel, mm[Hg], kg, cm, /min, g/dL, %)
+- Ordinals: |value (display text) and |code (numeric ordinal 0,1,2…)
 
 For openEHR CANONICAL JSON:
 - Map field_values paths back to the nested RM structure
 - Use DV_CODED_TEXT with defining_code.code_string and terminology_id.value
 - Use DV_QUANTITY with magnitude and units
 - Include archetype_details with template_id and archetype_id
+- Add COMPOSITION-level RM fields (composer, language, territory, category, context)
 
 For FHIR R4 JSON:
 - Map field_values FHIRPaths to the correct resource structure
