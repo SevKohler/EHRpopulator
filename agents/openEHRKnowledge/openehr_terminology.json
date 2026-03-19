@@ -21,15 +21,15 @@
       "name": "audit_change_type",
       "description": "Audit Change Type",
       "concepts": [
-        {"code": "249", "display": "creation"},
-        {"code": "250", "display": "amendment"},
-        {"code": "251", "display": "modification"},
-        {"code": "252", "display": "synthesis"},
-        {"code": "523", "display": "deleted"},
-        {"code": "666", "display": "attestation"},
-        {"code": "816", "display": "restoration"},
-        {"code": "817", "display": "format conversion"},
-        {"code": "253", "display": "unknown"}
+        {"code": "249", "display": "creation",          "definition": "A new version was created for the first time."},
+        {"code": "250", "display": "amendment",         "definition": "Clinical content was corrected or updated after original creation."},
+        {"code": "251", "display": "modification",      "definition": "Non-clinical or structural change (e.g. metadata update) without changing clinical meaning."},
+        {"code": "252", "display": "synthesis",         "definition": "A new version was derived by combining or aggregating data from multiple sources."},
+        {"code": "523", "display": "deleted",           "definition": "The version was marked as deleted (logical delete; data is retained in the audit trail)."},
+        {"code": "666", "display": "attestation",       "definition": "A clinician signed or witnessed the record, creating an attestation version."},
+        {"code": "816", "display": "restoration",       "definition": "A previously deleted version was restored to active status."},
+        {"code": "817", "display": "format conversion", "definition": "The record was converted from one technical format or schema to another without clinical change."},
+        {"code": "253", "display": "unknown",           "definition": "The type of change is not known."}
       ]
     },
     {
@@ -37,10 +37,10 @@
       "name": "composition_category",
       "description": "Composition Category",
       "concepts": [
-        {"code": "431", "display": "persistent"},
-        {"code": "451", "display": "episodic"},
-        {"code": "433", "display": "event"},
-        {"code": "815", "display": "report"}
+        {"code": "431", "display": "persistent",  "definition": "Composition intended to be kept indefinitely, independent of any specific episode of care (e.g. problem list, medication list, allergies)."},
+        {"code": "451", "display": "episodic",    "definition": "Composition scoped to a specific episode of care or encounter (e.g. discharge summary, operative report)."},
+        {"code": "433", "display": "event",       "definition": "Composition recording a point-in-time clinical event or observation within an encounter (e.g. vital signs, lab result)."},
+        {"code": "815", "display": "report",      "definition": "Composition that is a formal clinical report, typically produced at the end of an episode or investigation."}
       ]
     },
     {
@@ -60,17 +60,17 @@
       "name": "event_math_function",
       "description": "Event Math Function — used in INTERVAL_EVENT.math_function",
       "concepts": [
-        {"code": "145", "display": "minimum"},
-        {"code": "144", "display": "maximum"},
-        {"code": "267", "display": "mode"},
-        {"code": "268", "display": "median"},
-        {"code": "146", "display": "mean"},
-        {"code": "147", "display": "change"},
-        {"code": "148", "display": "total"},
-        {"code": "149", "display": "variation"},
-        {"code": "521", "display": "decrease"},
-        {"code": "522", "display": "increase"},
-        {"code": "640", "display": "actual"}
+        {"code": "145", "display": "minimum",   "definition": "The lowest value observed over the interval."},
+        {"code": "144", "display": "maximum",   "definition": "The highest value observed over the interval."},
+        {"code": "267", "display": "mode",      "definition": "The most frequently occurring value over the interval."},
+        {"code": "268", "display": "median",    "definition": "The middle value of the distribution over the interval."},
+        {"code": "146", "display": "mean",      "definition": "The arithmetic average of values over the interval."},
+        {"code": "147", "display": "change",    "definition": "The net change (end minus start) over the interval."},
+        {"code": "148", "display": "total",     "definition": "The sum of all values accumulated over the interval."},
+        {"code": "149", "display": "variation", "definition": "The statistical variation (variance or range) of values over the interval."},
+        {"code": "521", "display": "decrease",  "definition": "Indicates the value decreased over the interval."},
+        {"code": "522", "display": "increase",  "definition": "Indicates the value increased over the interval."},
+        {"code": "640", "display": "actual",    "definition": "A single actual measurement taken at a specific point within the interval (not aggregated)."}
       ]
     },
     {
@@ -95,26 +95,26 @@
       "name": "instruction_transitions",
       "description": "Instruction Transitions — used in ISM_TRANSITION.transition",
       "concepts": [
-        {"code": "535", "display": "initiate"},
-        {"code": "536", "display": "plan step"},
-        {"code": "537", "display": "postpone"},
-        {"code": "538", "display": "restore"},
-        {"code": "166", "display": "cancel"},
-        {"code": "542", "display": "postponed step"},
-        {"code": "539", "display": "schedule"},
-        {"code": "534", "display": "scheduled step"},
-        {"code": "540", "display": "start"},
-        {"code": "541", "display": "do"},
-        {"code": "543", "display": "active step"},
-        {"code": "544", "display": "suspend"},
-        {"code": "545", "display": "suspended step"},
-        {"code": "546", "display": "resume"},
-        {"code": "547", "display": "abort"},
-        {"code": "548", "display": "finish"},
-        {"code": "549", "display": "time out"},
-        {"code": "550", "display": "notify aborted"},
-        {"code": "551", "display": "notify completed"},
-        {"code": "552", "display": "notify cancelled"}
+        {"code": "535", "display": "initiate",          "definition": "Trigger that moves the instruction from initial to planned state."},
+        {"code": "536", "display": "plan step",         "definition": "An intermediate planning step while the instruction remains in planned state."},
+        {"code": "537", "display": "postpone",          "definition": "Defer the instruction; moves from planned to postponed state."},
+        {"code": "538", "display": "restore",           "definition": "Reinstate a postponed instruction back to planned state."},
+        {"code": "166", "display": "cancel",            "definition": "Abandon the instruction before it begins; moves to cancelled state."},
+        {"code": "542", "display": "postponed step",    "definition": "An activity recorded while the instruction is in postponed state."},
+        {"code": "539", "display": "schedule",          "definition": "Book the action in a scheduling system; moves from planned to scheduled state."},
+        {"code": "534", "display": "scheduled step",    "definition": "An activity recorded while the instruction is in scheduled state."},
+        {"code": "540", "display": "start",             "definition": "Begin execution of the instruction; moves from scheduled (or planned) to active state."},
+        {"code": "541", "display": "do",                "definition": "Perform one step of an active instruction (e.g. administer one dose)."},
+        {"code": "543", "display": "active step",       "definition": "Record an interim activity while the instruction remains active."},
+        {"code": "544", "display": "suspend",           "definition": "Temporarily pause an active instruction; moves to suspended state."},
+        {"code": "545", "display": "suspended step",    "definition": "An activity recorded while the instruction is in suspended state."},
+        {"code": "546", "display": "resume",            "definition": "Restart a suspended instruction; returns to active state."},
+        {"code": "547", "display": "abort",             "definition": "Permanently stop an active or suspended instruction; moves to aborted state."},
+        {"code": "548", "display": "finish",            "definition": "Successfully complete an active instruction; moves to completed state."},
+        {"code": "549", "display": "time out",          "definition": "The instruction expired because its time window passed; moves to expired state."},
+        {"code": "550", "display": "notify aborted",    "definition": "Notification event that the instruction was aborted (used for workflow messaging)."},
+        {"code": "551", "display": "notify completed",  "definition": "Notification event that the instruction was completed (used for workflow messaging)."},
+        {"code": "552", "display": "notify cancelled",  "definition": "Notification event that the instruction was cancelled (used for workflow messaging)."}
       ]
     },
     {
@@ -122,13 +122,13 @@
       "name": "normal_statuses",
       "description": "Normal Statuses — used in DV_QUANTITY.normal_status",
       "concepts": [
-        {"code": "HHH", "display": "HHH"},
-        {"code": "HH",  "display": "HH"},
-        {"code": "H",   "display": "H"},
-        {"code": "N",   "display": "N"},
-        {"code": "L",   "display": "L"},
-        {"code": "LL",  "display": "LL"},
-        {"code": "LLL", "display": "LLL"}
+        {"code": "HHH", "display": "HHH", "definition": "Critically high — value is dangerously above the normal range, requires immediate attention."},
+        {"code": "HH",  "display": "HH",  "definition": "Significantly high — value is notably above the normal range."},
+        {"code": "H",   "display": "H",   "definition": "High — value is above the upper boundary of the normal range."},
+        {"code": "N",   "display": "N",   "definition": "Normal — value is within the expected reference range."},
+        {"code": "L",   "display": "L",   "definition": "Low — value is below the lower boundary of the normal range."},
+        {"code": "LL",  "display": "LL",  "definition": "Significantly low — value is notably below the normal range."},
+        {"code": "LLL", "display": "LLL", "definition": "Critically low — value is dangerously below the normal range, requires immediate attention."}
       ]
     },
     {
@@ -136,10 +136,10 @@
       "name": "null_flavours",
       "description": "Null Flavours — used when a value is absent",
       "concepts": [
-        {"code": "271", "display": "no information"},
-        {"code": "253", "display": "unknown"},
-        {"code": "272", "display": "masked"},
-        {"code": "273", "display": "not applicable"}
+        {"code": "271", "display": "no information",  "definition": "No information is available about the value — it was never captured or recorded."},
+        {"code": "253", "display": "unknown",         "definition": "The value exists but is not known at the time of documentation."},
+        {"code": "272", "display": "masked",          "definition": "The value exists and is known but is withheld for privacy or security reasons."},
+        {"code": "273", "display": "not applicable",  "definition": "The concept does not apply to this patient or context (e.g. last menstrual period for a male patient)."}
       ]
     },
     {
@@ -155,18 +155,18 @@
       "name": "participation_mode",
       "description": "Participation Mode — how the party participated",
       "concepts": [
-        {"code": "193", "display": "not specified"},
-        {"code": "216", "display": "face-to-face communication"},
-        {"code": "223", "display": "interpreted face-to-face communication"},
-        {"code": "217", "display": "signing (face-to-face)"},
-        {"code": "195", "display": "live audiovisual; videoconference; videophone"},
-        {"code": "198", "display": "videoconferencing"},
-        {"code": "197", "display": "videophone"},
-        {"code": "202", "display": "telephone"},
-        {"code": "203", "display": "teleconference"},
-        {"code": "207", "display": "email"},
-        {"code": "219", "display": "physically present"},
-        {"code": "220", "display": "physically remote"}
+        {"code": "193", "display": "not specified",                           "definition": "The mode of participation was not recorded."},
+        {"code": "216", "display": "face-to-face communication",              "definition": "The party was physically present and communicated directly in person."},
+        {"code": "223", "display": "interpreted face-to-face communication",  "definition": "Face-to-face communication with a language interpreter present."},
+        {"code": "217", "display": "signing (face-to-face)",                  "definition": "Face-to-face communication conducted in sign language."},
+        {"code": "195", "display": "live audiovisual; videoconference; videophone", "definition": "Real-time audio and video communication (e.g. telehealth video call)."},
+        {"code": "198", "display": "videoconferencing",                       "definition": "Multi-party real-time video call."},
+        {"code": "197", "display": "videophone",                              "definition": "Two-party real-time video call."},
+        {"code": "202", "display": "telephone",                               "definition": "Communication by telephone (voice only)."},
+        {"code": "203", "display": "teleconference",                          "definition": "Multi-party telephone conference call."},
+        {"code": "207", "display": "email",                                   "definition": "Asynchronous communication via email."},
+        {"code": "219", "display": "physically present",                      "definition": "The party was present at the care location but their communication mode was not separately specified."},
+        {"code": "220", "display": "physically remote",                       "definition": "The party participated from a different physical location (mode of remote contact not specified)."}
       ]
     },
     {
@@ -174,20 +174,20 @@
       "name": "setting",
       "description": "Setting — used in EVENT_CONTEXT.setting",
       "concepts": [
-        {"code": "225", "display": "home"},
-        {"code": "227", "display": "emergency care"},
-        {"code": "228", "display": "primary medical care"},
-        {"code": "229", "display": "primary nursing care"},
-        {"code": "230", "display": "primary allied health care"},
-        {"code": "231", "display": "midwifery care"},
-        {"code": "232", "display": "secondary medical care"},
-        {"code": "233", "display": "secondary nursing care"},
-        {"code": "234", "display": "secondary allied health care"},
-        {"code": "235", "display": "complementary health care"},
-        {"code": "236", "display": "dental care"},
-        {"code": "237", "display": "nursing home care"},
-        {"code": "802", "display": "mental healthcare"},
-        {"code": "238", "display": "other care"}
+        {"code": "225", "display": "home",                          "definition": "Care delivered in the patient's own home, including home visits and telehealth from home."},
+        {"code": "227", "display": "emergency care",                "definition": "Acute unplanned care in an emergency department or urgent care centre."},
+        {"code": "228", "display": "primary medical care",          "definition": "Outpatient GP/family physician consultation in a primary care setting."},
+        {"code": "229", "display": "primary nursing care",          "definition": "Nursing-led care in a community or primary care context."},
+        {"code": "230", "display": "primary allied health care",    "definition": "Allied health (physiotherapy, occupational therapy, etc.) in a primary care context."},
+        {"code": "231", "display": "midwifery care",                "definition": "Midwife-led antenatal, intrapartum, or postnatal care."},
+        {"code": "232", "display": "secondary medical care",        "definition": "Inpatient or specialist outpatient care in a hospital or secondary care facility."},
+        {"code": "233", "display": "secondary nursing care",        "definition": "Nursing care delivered in a hospital inpatient ward."},
+        {"code": "234", "display": "secondary allied health care",  "definition": "Allied health delivered in a hospital or secondary care setting."},
+        {"code": "235", "display": "complementary health care",     "definition": "Complementary or alternative medicine consultation (e.g. acupuncture, homeopathy)."},
+        {"code": "236", "display": "dental care",                   "definition": "Care delivered by a dentist or dental specialist."},
+        {"code": "237", "display": "nursing home care",             "definition": "Care in a residential aged care or nursing home facility."},
+        {"code": "802", "display": "mental healthcare",             "definition": "Psychiatric or psychological care, inpatient or outpatient."},
+        {"code": "238", "display": "other care",                    "definition": "Any other care setting not covered by the above categories."}
       ]
     },
     {
@@ -195,23 +195,23 @@
       "name": "subject_relationship",
       "description": "Subject Relationship — used in PARTY_RELATED.relationship",
       "concepts": [
-        {"code": "0",   "display": "self"},
-        {"code": "3",   "display": "foetus"},
-        {"code": "10",  "display": "mother"},
-        {"code": "9",   "display": "father"},
-        {"code": "6",   "display": "donor"},
-        {"code": "253", "display": "unknown"},
-        {"code": "22",  "display": "partner/spouse"},
-        {"code": "23",  "display": "brother"},
-        {"code": "24",  "display": "sister"},
-        {"code": "27",  "display": "sibling"},
-        {"code": "28",  "display": "child"},
-        {"code": "29",  "display": "daughter"},
-        {"code": "31",  "display": "son"},
-        {"code": "254", "display": "parent"},
-        {"code": "255", "display": "biological mother"},
-        {"code": "256", "display": "biological father"},
-        {"code": "189", "display": "neonate"}
+        {"code": "0",   "display": "self",              "definition": "The subject of the data is the patient themselves (most common case)."},
+        {"code": "3",   "display": "foetus",            "definition": "The subject is an unborn foetus; data recorded on behalf of the mother."},
+        {"code": "10",  "display": "mother",            "definition": "The related party is the patient's mother (used for family history entries)."},
+        {"code": "9",   "display": "father",            "definition": "The related party is the patient's father (used for family history entries)."},
+        {"code": "6",   "display": "donor",             "definition": "The related party is an organ or tissue donor."},
+        {"code": "253", "display": "unknown",           "definition": "The relationship is not known."},
+        {"code": "22",  "display": "partner/spouse",    "definition": "The related party is the patient's partner or spouse."},
+        {"code": "23",  "display": "brother",           "definition": "The related party is the patient's brother."},
+        {"code": "24",  "display": "sister",            "definition": "The related party is the patient's sister."},
+        {"code": "27",  "display": "sibling",           "definition": "The related party is a sibling of the patient (sex unspecified)."},
+        {"code": "28",  "display": "child",             "definition": "The related party is a child of the patient (sex unspecified)."},
+        {"code": "29",  "display": "daughter",          "definition": "The related party is the patient's daughter."},
+        {"code": "31",  "display": "son",               "definition": "The related party is the patient's son."},
+        {"code": "254", "display": "parent",            "definition": "The related party is a parent of the patient (sex unspecified)."},
+        {"code": "255", "display": "biological mother", "definition": "The related party is the patient's biological mother (distinct from adoptive/legal mother)."},
+        {"code": "256", "display": "biological father", "definition": "The related party is the patient's biological father (distinct from adoptive/legal father)."},
+        {"code": "189", "display": "neonate",           "definition": "The subject is a newborn; data recorded in the neonatal period shortly after birth."}
       ]
     },
     {
