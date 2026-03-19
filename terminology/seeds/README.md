@@ -16,5 +16,6 @@ docker compose restart terminology-loader
 | `SnomedCT_InternationalRF2_*.zip` | SNOMED CT RF2 release — needs snomed.org license |
 | `Loinc_*.json` | LOINC FHIR R4 CodeSystem — download from loinc.org |
 | `icd10*.json` | ICD-10 FHIR CodeSystem |
+| `icd10*.xml` | ICD-10 ClaML XML (e.g. from DIMDI/BfArM) — converted automatically |
 
 All files in this folder (except this README and `.loaded`) are gitignored.

@@ -23,6 +23,8 @@ import sys
 import time
 import requests
 
+import xml.etree.ElementTree as ET
+
 SNOWSTORM_URL = os.environ.get("SNOWSTORM_URL", "http://snowstorm:8080")
 FHIR_BASE = f"{SNOWSTORM_URL}/fhir"
 SEEDS_DIR = "/terminology/seeds"
@@ -129,6 +131,114 @@ def load_snomed(zip_path: str, loaded: set):
             return
 
 
+def claml_to_fhir(xml_path: str) -> dict:
+    """
+    Convert a ClaML XML file (ICD-10, ICD-11, or similar) to a FHIR R4 CodeSystem.
+
+    ClaML is the XML format distributed by WHO/DIMDI/BfArM for ICD releases.
+    Extracts: code, preferred display label, parent code (for hierarchy).
+    """
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    # Strip namespace if present
+    tag = root.tag
+    ns = ""
+    if tag.startswith("{"):
+        ns = tag[:tag.index("}") + 1]
+
+    def t(name):
+        return f"{ns}{name}"
+
+    # Title / version from metadata
+    title_el = root.find(t("Title"))
+    title = title_el.text.strip() if title_el is not None else "ICD"
+    version = title_el.get("version", "") if title_el is not None else ""
+
+    # Detect ICD system URL from title text
+    title_lower = title.lower()
+    if "icd-10" in title_lower or "icd10" in title_lower:
+        system_url = "http://hl7.org/fhir/sid/icd-10"
+    elif "icd-11" in title_lower or "icd11" in title_lower:
+        system_url = "http://hl7.org/fhir/sid/icd-11"
+    else:
+        system_url = f"urn:claml:{title.replace(' ', '_')}"
+
+    concepts = []
+    for cls in root.iter(t("Class")):
+        code = cls.get("code", "").strip()
+        if not code:
+            continue
+
+        # Preferred display label
+        display = ""
+        for rubric in cls.findall(t("Rubric")):
+            if rubric.get("kind") in ("preferred", "preferredLong"):
+                label = rubric.find(t("Label"))
+                if label is not None and label.text:
+                    display = "".join(label.itertext()).strip()
+                    break
+
+        if not display:
+            continue
+
+        concept: dict = {"code": code, "display": display}
+
+        # Parent code
+        parent = cls.find(t("SuperClass"))
+        if parent is not None and parent.get("code"):
+            concept["property"] = [{"code": "parent", "valueCode": parent.get("code")}]
+
+        concepts.append(concept)
+
+    print(f"  Converted {len(concepts)} concepts from ClaML", flush=True)
+
+    return {
+        "resourceType": "CodeSystem",
+        "url": system_url,
+        "version": version,
+        "name": title.replace(" ", "_"),
+        "title": title,
+        "status": "active",
+        "content": "complete",
+        "property": [{"code": "parent", "type": "code", "description": "Parent code"}],
+        "concept": concepts,
+    }
+
+
+def load_claml(xml_path: str, loaded: set):
+    name = os.path.basename(xml_path)
+    if name in loaded:
+        print(f"  [seeds] SKIP {name} (already loaded)", flush=True)
+        return
+
+    print(f"  [seeds] Converting ClaML: {name}...", flush=True)
+    try:
+        resource = claml_to_fhir(xml_path)
+    except Exception as e:
+        print(f"  ERROR parsing ClaML {name}: {e}", flush=True)
+        return
+
+    url = resource.get("url", "")
+    if code_system_exists(url):
+        print(f"  [seeds] SKIP: {url} already in Snowstorm", flush=True)
+        loaded.add(name)
+        save_state(loaded)
+        return
+
+    print(f"  Loading CodeSystem {url}...", flush=True)
+    r = requests.post(f"{FHIR_BASE}/CodeSystem",
+                      headers={"Content-Type": "application/fhir+json"},
+                      json=resource,
+                      timeout=300)
+    if r.status_code in (200, 201):
+        print(f"  OK: {name} loaded as {url}", flush=True)
+        loaded.add(name)
+        save_state(loaded)
+    else:
+        print(f"  ERROR {r.status_code}: {r.text[:300]}", flush=True)
+
+
 def load_fhir_json(json_path: str, *, always_reload: bool = False) -> bool:
     name = os.path.basename(json_path)
     try:
@@ -189,6 +299,8 @@ def main():
                         if load_fhir_json(path, always_reload=False):
                             loaded.add(filename)
                             save_state(loaded)
+                elif filename.endswith(".xml"):
+                    load_claml(path, loaded)
                 else:
                     print(f"  SKIP {filename}: unknown extension", flush=True)
         else:
