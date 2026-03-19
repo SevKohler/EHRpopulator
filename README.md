@@ -37,7 +37,7 @@ make setup
 
 ### 2. Add terminology files
 
-Drop your files into `terminology/seeds/` — loaded once by the terminology-loader container, never committed.
+Drop your files into `terminology/seeds/` — loaded once by `make setup`, never committed.
 
 | File | What |
 |---|---|
@@ -45,7 +45,7 @@ Drop your files into `terminology/seeds/` — loaded once by the terminology-loa
 | `Loinc_*.zip` | LOINC — download from [loinc.org](https://loinc.org/downloads/) |
 | `icd10*.xml` or `icd10*.zip` | ICD-10 ClaML (international or national, e.g. ICD-10-GM) |
 
-Your own FHIR `CodeSystem` / `ValueSet` JSON files go in `terminology/fhir/` — reloaded on every restart.
+Your own FHIR `CodeSystem` / `ValueSet` JSON files go in `terminology/fhir/` — loaded on setup.
 
 ### 3. Set your API key
 
@@ -64,25 +64,28 @@ templates/fhir/      ← StructureDefinition .json files
 ### 5. Start the stack
 
 ```bash
-make start
+docker compose up -d
 ```
 
-This starts Snowstorm, the validator, and the terminology loader (which imports your terminology files automatically).
+Starts Snowstorm, the validator, EHRbase, and the FHIR server. Start only what you need:
+
+```bash
+# Terminology + validation only (no EHRbase/FHIR server)
+docker compose up -d validator snowstorm snowstorm-es
+
+# If you already have EHRbase/Snowstorm running elsewhere
+docker compose up -d validator fhir
+```
+
+### 6. Load terminology
+
+```bash
+make setup
+```
+
+This installs Python dependencies and imports your terminology files from `terminology/seeds/` into Snowstorm. Run once — progress is shown in the terminal. Skip files that are already loaded.
 
 > **First run:** SNOMED CT import takes 20–60 min, LOINC and ICD-10 a few minutes.
-> Watch progress:
-
-```bash
-make logs-terminology
-```
-
-### 6. Check status
-
-```bash
-make status
-```
-
-Shows which services are up and which terminologies are loaded. When everything is green → run the tool.
 
 ---
 
@@ -91,7 +94,7 @@ Shows which services are up and which terminologies are loaded. When everything 
 ### Interactive (recommended)
 
 ```bash
-make run
+make popu
 ```
 
 You will be asked:
@@ -139,16 +142,19 @@ Sample journeys (up to 10) are saved to `output/journeys/` for inspection — wi
 
 | Command | What |
 |---|---|
-| `make setup` | Install Python dependencies (one time) |
-| `make start` | Start full stack (Snowstorm, validator, terminology loader, EHRbase, FHIR server) |
-| `make start-light` | Start without EHRbase and FHIR server (terminology + validation only) |
-| `make stop` | Stop everything |
-| `make status` | Show service health and terminology loading progress |
-| `make logs-terminology` | Watch terminology import progress |
-| `make reload-terminology` | Reload files from `terminology/fhir/` |
-| `make run` | Interactive generation |
+| `make setup` | Install Python deps and load terminology into Snowstorm (run once) |
+| `make popu` | Interactive generation |
 | `make generate ARGS="..."` | Non-interactive generation |
 | `make analyze ARGS="..."` | Inspect a template's structure |
+
+Docker compose is managed directly:
+
+| Command | What |
+|---|---|
+| `docker compose up -d` | Start the full stack |
+| `docker compose up -d validator snowstorm snowstorm-es` | Start terminology + validation only |
+| `docker compose down` | Stop everything |
+| `docker compose logs -f <service>` | Watch logs for a service |
 
 ---
 

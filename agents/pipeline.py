@@ -19,13 +19,16 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
-from rich.console import Console
+from rich.console import Console, Group
+from rich.live import Live
+from rich.markup import escape
+from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
 
 from models import (
@@ -154,12 +157,51 @@ class Pipeline:
         journey_dir.mkdir(parents=True)
         JOURNEY_SAMPLE_LIMIT = 10
 
-        def process_patient(i: int) -> list[GeneratedResource]:
+        # Live display: progress bar on top, verbose log for patient 1 below
+        log_lines: list[str] = []
+        log_lock = threading.Lock()
+        LOG_MAX = 30
+
+        progress = Progress(
+            SpinnerColumn(), TextColumn("{task.description}"),
+            BarColumn(), MofNCompleteColumn(),
+            console=console, auto_refresh=False,
+        )
+        task = progress.add_task(
+            f"Generating {count} patient(s) × {len(analyses)} template(s)...",
+            total=count,
+        )
+
+        def _get_renderable():
+            with log_lock:
+                lines = log_lines[-LOG_MAX:]
+            body = "\n".join(lines) if lines else "[dim]Waiting for patient 1...[/dim]"
+            return Group(
+                progress,
+                Panel(body, title="[bold cyan]Patient 1 — live[/bold cyan]",
+                      border_style="dim cyan", padding=(0, 1)),
+            )
+
+        def process_patient(i: int, live: Live) -> list[GeneratedResource]:
+            verbose = (i == 0)
+
+            def log(msg: str) -> None:
+                if not verbose:
+                    return
+                with log_lock:
+                    log_lines.append(msg)
+                live.update(_get_renderable())
+
+            log("[bold]Generating journey...[/bold]")
             journey = self.journey_generator.generate(
                 analyses=analyses,
                 scenario=scenario,
                 patient_index=i,
             )
+
+            log(f"[green]{journey.age}y {journey.gender}[/green]  "
+                f"{escape(journey.narrative[:300])}")
+
             with lock:
                 if i < JOURNEY_SAMPLE_LIMIT:
                     (journey_dir / f"journey_{i+1}_{journey.patient_id}.json").write_text(
@@ -167,8 +209,12 @@ class Pipeline:
                     )
 
             patient_resources = []
-            for analysis, opt_xml, struct_def in template_infos:
-                resource = self._compose_with_validation(journey, analysis, format, opt_xml, struct_def)
+            for j, (analysis, opt_xml, struct_def) in enumerate(template_infos):
+                log(f"\n[bold]Template {j+1}/{len(template_infos)}:[/bold] "
+                    f"[cyan]{escape(analysis.name)}[/cyan]")
+                resource = self._compose_with_validation(
+                    journey, analysis, format, opt_xml, struct_def, log
+                )
                 with lock:
                     self._save(resource, i)
                 if upload:
@@ -176,15 +222,9 @@ class Pipeline:
                 patient_resources.append(resource)
             return patient_resources
 
-        with Progress(SpinnerColumn(), TextColumn("{task.description}"),
-                      BarColumn(), MofNCompleteColumn(),
-                      console=console) as progress:
-            task = progress.add_task(
-                f"Generating {count} patient(s) × {len(analyses)} template(s)...",
-                total=count)
-
+        with Live(_get_renderable(), console=console, refresh_per_second=4) as live:
             with ThreadPoolExecutor(max_workers=self.workers) as executor:
-                futures = {executor.submit(process_patient, i): i for i in range(count)}
+                futures = {executor.submit(process_patient, i, live): i for i in range(count)}
                 for future in as_completed(futures):
                     i = futures[future]
                     try:
@@ -192,8 +232,12 @@ class Pipeline:
                         with lock:
                             results.extend(patient_resources)
                     except Exception as e:
-                        console.print(f"  [red]Patient {i+1} failed:[/red] {e}")
+                        with log_lock:
+                            if i == 0:
+                                log_lines.append(f"[red]Patient {i+1} failed:[/red] {escape(str(e))}")
+                        live.console.print(f"  [red]Patient {i+1} failed:[/red] {e}")
                     progress.advance(task)
+                    live.update(_get_renderable())
 
         valid_count = sum(1 for r in results if r.valid)
         console.print(f"\n[bold]Done.[/bold] {valid_count}/{total} compositions valid. "
@@ -211,16 +255,21 @@ class Pipeline:
         format: ResourceFormat,
         opt_xml: str | None,
         structure_def_json: str | None,
+        log_fn: Callable[[str], None] | None = None,
     ) -> GeneratedResource:
+
+        if log_fn is None:
+            log_fn = lambda _: None  # noqa: E731
 
         validation_errors = ""
 
         for attempt in range(1, self.max_retries + 1):
-            # Compose
+            log_fn(f"  [dim]Attempt {attempt}/{self.max_retries} — composing...[/dim]")
+
             raw = self.composer.compose(journey, analysis, format.value, validation_errors)
             raw = _strip_markdown(raw)
 
-            # Validate via Java validator service
+            log_fn(f"  [dim]Validating...[/dim]")
             result = self._validate(raw, format, opt_xml, structure_def_json)
 
             resource = GeneratedResource(
@@ -234,16 +283,22 @@ class Pipeline:
             )
 
             if result.valid:
-                console.print(f"  [green]✓[/green] Valid on attempt {attempt}")
+                log_fn(f"  [green]✓ Valid on attempt {attempt}[/green]")
                 return resource
 
-            error_count = len(result.errors)
-            console.print(f"  [yellow]✗[/yellow] Attempt {attempt}: {error_count} error(s)")
+            errors = result.errors
+            log_fn(f"  [yellow]✗ Attempt {attempt}: {len(errors)} error(s)[/yellow]")
+            for err in errors[:8]:
+                loc = escape(err.location or "/")
+                msg = escape(err.message[:150])
+                log_fn(f"    [red]•[/red] [dim]{loc}[/dim] {msg}")
+            if len(errors) > 8:
+                log_fn(f"    [dim]… and {len(errors) - 8} more[/dim]")
 
             if attempt < self.max_retries:
                 validation_errors = result.error_summary()
             else:
-                console.print(f"  [red]Max retries reached.[/red] Saving best-effort result.")
+                log_fn(f"  [red]Max retries reached — saving best-effort result.[/red]")
 
         return resource  # type: ignore[return-value]
 
@@ -392,6 +447,7 @@ class Pipeline:
         except (json.JSONDecodeError, ValueError):
             pretty = resource.content
         out_path.write_text(pretty, encoding="utf-8")
+        resource.output_path = str(out_path)
 
         # Save metadata alongside
         meta_path = self.output_dir / (filename.replace(".json", ".meta.json"))
