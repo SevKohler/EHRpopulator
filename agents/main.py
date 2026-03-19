@@ -12,6 +12,10 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env from the agents/ directory
+load_dotenv(Path(__file__).parent / ".env")
 from typing import Annotated, Optional
 
 import typer
