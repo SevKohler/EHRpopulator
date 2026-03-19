@@ -107,17 +107,16 @@ public class OpenEhrValidationService {
                 return issues;
             }
 
-            var opt = optRegistry.getOpt(templateId);
-            if (opt == null) {
+            var webTemplate = optRegistry.getWebTemplate(templateId);
+            if (webTemplate == null) {
                 issues.add(new ValidationResponse.Issue("WARNING", "/",
                     "OPT not registered for template '" + templateId +
                     "'. Pass opt_xml in request."));
                 return issues;
             }
-
             var composition = parseComposition(request.getContent(), request.getFormat(), templateId);
-            var validator = new org.ehrbase.openehr.sdk.validation.CompositionValidator();
-            var results = validator.validate(composition, opt);
+            var validator = new org.ehrbase.openehr.sdk.validation.LocatableValidator();
+            var results = validator.validate(composition, webTemplate);
 
             for (var r : results) {
                 issues.add(new ValidationResponse.Issue(
@@ -204,22 +203,20 @@ public class OpenEhrValidationService {
      *
      * Canonical JSON maps 1:1 to the RM structure — deserialized directly via CanonicalJson.
      * Flat JSON uses dot-notation paths from the web template — deserialized via
-     * FlatJasonProvider which needs the WebTemplate to resolve paths.
+     * FlatJasonProvider (which uses OptRegistry as TemplateProvider to resolve paths).
      */
     private com.nedap.archie.rm.composition.Composition parseComposition(
             String content, String format, String templateId) throws Exception {
         if ("OPENEHR_FLAT".equals(format)) {
-            var webTemplate = optRegistry.getWebTemplate(templateId);
-            if (webTemplate == null) {
-                throw new IllegalStateException(
-                    "WebTemplate not available for '" + templateId + "' — cannot deserialize flat JSON");
-            }
             var provider = new org.ehrbase.openehr.sdk.serialisation.flatencoding.FlatJasonProvider(
-                java.util.Collections.singletonMap(templateId, webTemplate));
-            return provider.buildCompositionFromFlatJson(templateId, content);
+                    optRegistry);
+            return provider
+                    .buildFlatJson(org.ehrbase.openehr.sdk.serialisation.flatencoding.FlatFormat.SIM_SDT,
+                            templateId)
+                    .unmarshal(content);
         } else {
             return new org.ehrbase.openehr.sdk.serialisation.jsonencoding.CanonicalJson()
-                .unmarshal(content, com.nedap.archie.rm.composition.Composition.class);
+                    .unmarshal(content, com.nedap.archie.rm.composition.Composition.class);
         }
     }
 

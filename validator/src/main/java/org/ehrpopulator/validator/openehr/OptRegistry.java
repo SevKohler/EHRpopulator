@@ -2,8 +2,9 @@ package org.ehrpopulator.validator.openehr;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.ehrbase.openehr.sdk.webtemplate.builder.WebTemplateBuilder;
 import org.ehrbase.openehr.sdk.webtemplate.model.WebTemplate;
+import org.ehrbase.openehr.sdk.webtemplate.parser.OPTParser;
+import org.ehrbase.openehr.sdk.webtemplate.templateprovider.TemplateProvider;
 import org.openehr.schemas.v1.OPERATIONALTEMPLATE;
 import org.openehr.schemas.v1.TemplateDocument;
 import org.slf4j.Logger;
@@ -13,25 +14,24 @@ import org.springframework.stereotype.Component;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * In-memory registry of loaded OPTs (Operational Templates).
+ * In-memory registry of loaded OPTs.
  *
- * OPTs can be registered at runtime via the validation request's opt_xml field.
- * Both the parsed OPERATIONALTEMPLATE (for CompositionValidator) and the WebTemplate
- * (for flat JSON deserialization) are stored per template ID.
+ * Stores both the raw OPERATIONALTEMPLATE (for TemplateProvider) and the
+ * parsed WebTemplate (for validation and flat JSON deserialization).
  *
- * Thread-safe for concurrent validation requests.
+ * Implements TemplateProvider so it can be passed directly to FlatJasonProvider.
  */
 @Component
-public class OptRegistry {
+public class OptRegistry implements TemplateProvider {
 
     private static final Logger log = LoggerFactory.getLogger(OptRegistry.class);
 
     private final Map<String, OPERATIONALTEMPLATE> opts = new ConcurrentHashMap<>();
     private final Map<String, WebTemplate> webTemplates = new ConcurrentHashMap<>();
-
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -40,21 +40,23 @@ public class OptRegistry {
      */
     public void register(String optXml) {
         try {
-            OPERATIONALTEMPLATE opt = TemplateDocument.Factory.parse(
-                    new ByteArrayInputStream(optXml.getBytes(StandardCharsets.UTF_8))
-            ).getTemplate();
-
+            byte[] bytes = optXml.getBytes(StandardCharsets.UTF_8);
+            OPERATIONALTEMPLATE opt = TemplateDocument.Factory
+                    .parse(new ByteArrayInputStream(bytes))
+                    .getTemplate();
             String templateId = opt.getTemplateId().getValue();
             opts.put(templateId, opt);
-            webTemplates.put(templateId, new WebTemplateBuilder().build(opt, false));
+            webTemplates.put(templateId, OPTParser.parse(opt));
             log.info("Registered OPT: {}", templateId);
         } catch (Exception e) {
             throw new RuntimeException("Failed to parse OPT XML: " + e.getMessage(), e);
         }
     }
 
-    public OPERATIONALTEMPLATE getOpt(String templateId) {
-        return opts.get(templateId);
+    /** Required by TemplateProvider — used by FlatJasonProvider internally. */
+    @Override
+    public Optional<OPERATIONALTEMPLATE> find(String templateId) {
+        return Optional.ofNullable(opts.get(templateId));
     }
 
     public WebTemplate getWebTemplate(String templateId) {
