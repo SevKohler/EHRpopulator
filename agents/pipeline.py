@@ -18,6 +18,7 @@ import json
 import os
 import re
 import time
+import traceback
 from pathlib import Path
 from typing import Any, Callable
 
@@ -199,8 +200,12 @@ class Pipeline:
                 patient_index=i,
             )
 
-            log(f"[green]{journey.age}y {journey.gender}[/green]  "
-                f"{escape(journey.narrative[:300])}")
+            log(Panel(
+                escape(journey.narrative),
+                title=f"[green]{journey.age}y {journey.gender}[/green]",
+                title_align="left",
+                expand=False,
+            ))
 
             with lock:
                 if i < JOURNEY_SAMPLE_LIMIT:
@@ -232,10 +237,11 @@ class Pipeline:
                         with lock:
                             results.extend(patient_resources)
                     except Exception as e:
+                        tb = traceback.format_exc()
                         with log_lock:
                             if i == 0:
                                 log_lines.append(f"[red]Patient {i+1} failed:[/red] {escape(str(e))}")
-                        live.console.print(f"  [red]Patient {i+1} failed:[/red] {e}")
+                        live.console.print(f"  [red]Patient {i+1} failed:[/red] {e}\n{tb}")
                     progress.advance(task)
                     live.update(_get_renderable())
 

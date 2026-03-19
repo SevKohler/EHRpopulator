@@ -94,17 +94,18 @@ class PatientJourney(BaseModel):
     """
     A realistic patient journey, produced by the JourneyGeneratorAgent.
 
-    field_values maps each template path directly to a clinical value — the
-    journey generator does the path annotation so the composer only needs to
-    validate/expand terminology codes and serialize to the target format.
+    compositions maps each template_id to its own field_values dict, so the
+    composer for template X only sees paths belonging to X.  Repeatable
+    elements are expressed with integer indexes in the path, e.g.
+    "diagnosis[0]/value|value" and "diagnosis[1]/value|value".
     """
     patient_id: str
     age: int
     gender: str
-    narrative: str                              # Brief clinical context / summary
-    field_values: dict[str, Any] = Field(       # template path → raw value
+    narrative: str                                    # Clinical context / summary
+    compositions: dict[str, dict[str, Any]] = Field( # template_id → {path → value}
         default_factory=dict,
-        description="Maps each flat path or FHIRPath to its value for this patient"
+        description="Per-template field_values, keyed by template_id"
     )
 
 

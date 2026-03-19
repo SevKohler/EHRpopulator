@@ -35,7 +35,7 @@ def _anthropic_client(config: dict) -> Callable:
 
     client = anthropic.Anthropic(api_key=api_key)
     model = config.get("model", "claude-opus-4-5")
-    max_tokens = config.get("max_tokens", 8192)
+    max_tokens = config.get("max_tokens", 16384)
     temperature = config.get("temperature", 0.7)
 
     def call(system: str, user: str, tools: list[dict] | None = None) -> str:
@@ -60,6 +60,12 @@ def _anthropic_client(config: dict) -> Callable:
                 messages=messages,
                 tools=tools or [],
             )
+
+            if response.stop_reason == "max_tokens":
+                raise RuntimeError(
+                    f"LLM output was truncated (max_tokens={max_tokens} reached). "
+                    "Increase max_tokens in config or reduce template complexity."
+                )
 
             if response.stop_reason == "end_turn" or not tools:
                 # Extract text from response

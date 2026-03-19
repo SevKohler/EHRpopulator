@@ -39,7 +39,7 @@ and wrap values in format-specific types.
 RULES:
 1. Follow the scenario description — it defines the patient type and clinical focus
 2. Be specific: exact dates (ISO 8601), numeric values with UCUM units, real terminology codes
-3. Every required path must have a value in field_values
+3. Every required path must have a value in its template's field_values
 4. For coded fields use the display term as value (e.g. "Type 2 diabetes mellitus") — the
    composer will look up and validate the actual code via the terminology server
 5. For quantity fields use a plain number; put the unit in the companion |unit or |units path
@@ -47,31 +47,47 @@ RULES:
 7. Vary the patient — different age, gender, severity, comorbidities each time
 8. Fictional patients only
 
-openEHR RM FIELDS — include these in field_values for every openEHR template:
+MULTI-ENTRY (REPEATABLE) FIELDS:
+Some fields have cardinality like "0..n", "1..n", or "0..*" — these can appear multiple times.
+When clinically appropriate, generate MULTIPLE entries by repeating the path with an integer index.
+Example — two diagnoses in one composition:
+  "diagnose[0]/data[at0001]/items[at0002.1]/value|value": "Type 2 diabetes mellitus",
+  "diagnose[0]/data[at0001]/items[at0006]/value|value": "2019-03-01",
+  "diagnose[1]/data[at0001]/items[at0002.1]/value|value": "Arterial hypertension",
+  "diagnose[1]/data[at0001]/items[at0006]/value|value": "2015-06-15"
+Always index ALL sub-paths of a repeated entry with the same integer.
+Fields marked (cardinality: 1..1 or 0..1) must appear at most once — do NOT index them.
+
+openEHR RM FIELDS — include these in every openEHR template's field_values:
   context/start_time         When the clinical encounter started (ISO 8601)
   context/end_time           When it ended (ISO 8601, optional, omit for outpatient snap)
   composer/name              Name of the treating/authoring clinician (e.g. "Dr. Maria Schmidt")
   context/setting|value      Clinical setting: "primary medical care", "secondary medical care",
                              "home", "other care" — pick what fits the scenario
   context/health_care_facility|name   Name of the hospital or clinic (make it realistic)
-These are RM-level and exist in every composition regardless of what the template defines.
 
 Output valid JSON with exactly this structure:
 {
   "patient_id": "PAT-001",
   "age": 54,
   "gender": "female",
-  "narrative": "A detailed clinical narrative (3-5 paragraphs) telling the patient's story chronologically: presenting complaint, history, clinical course, relevant findings, treatments, and outcome. Write as a physician would document it — specific, clinically realistic, and consistent with the field_values below.",
-  "field_values": {
-    "path/to/field|magnitude": 38.5,
-    "path/to/field|unit": "Cel",
-    "path/to/coded_field|value": "Hypertension",
-    "path/to/coded_field|terminology": "SNOMED-CT",
-    "path/to/datetime_field": "2024-03-15T09:30:00+01:00"
+  "narrative": "A detailed clinical narrative (3-5 paragraphs) telling the patient's story chronologically: presenting complaint, history, clinical course, relevant findings, treatments, and outcome. Write as a physician would document it — specific, clinically realistic, and consistent with all compositions below.",
+  "compositions": {
+    "<template_id>": {
+      "context/start_time": "2024-03-15T09:30:00+01:00",
+      "path/to/field|magnitude": 38.5,
+      "path/to/field|unit": "Cel",
+      "path/to/coded_field|value": "Hypertension",
+      "path/to/coded_field|terminology": "SNOMED-CT"
+    },
+    "<another_template_id>": {
+      "context/start_time": "2024-03-15T09:30:00+01:00",
+      "path/to/other_field": "value"
+    }
   }
 }
 
-Use the exact paths from the template field list below — copy them verbatim into field_values.
+Use the exact template IDs and paths listed below. Each template gets its own key in compositions.
 Do not include any text outside the JSON.
 """.strip()
 
@@ -181,13 +197,14 @@ class JourneyGeneratorAgent:
         templates_section = ""
         for analysis in analyses:
             templates_section += f"""
-TEMPLATE: {analysis.name} (ID: {analysis.template_id})
-Clinical concepts: {', '.join(analysis.clinical_concepts)}
-{f'Notes: {analysis.notes}' if analysis.notes else ''}
-Required fields — the narrative MUST contain specific values for each of these:
-{_format_elements(analysis.required_elements)}
-Optional fields — include where clinically appropriate:
-{_format_elements(analysis.optional_elements)}
+TEMPLATE: {analysis.name}
+  template_id (use as key in compositions): "{analysis.template_id}"
+  Clinical concepts: {', '.join(analysis.clinical_concepts)}
+  {f'Notes: {analysis.notes}' if analysis.notes else ''}
+  Required fields:
+{_format_elements(analysis.required_elements, slim=True)}
+  Optional fields (include where clinically appropriate):
+{_format_elements(analysis.optional_elements, slim=True)}
 """.strip() + "\n\n"
 
         user_msg = f"""
@@ -196,7 +213,10 @@ Generate patient data for patient #{patient_index + 1}.
 SCENARIO (defines the patient type — follow closely):
 {scenario}
 
-Map values onto all required paths from these templates. Include each path verbatim in field_values:
+Each template below gets its own key in the "compositions" output dict (use the template_id exactly).
+Map required paths for each template into the corresponding compositions entry.
+For repeatable fields (cardinality 0..n / 1..n) generate multiple indexed entries where clinically
+appropriate — e.g. multiple diagnoses, multiple observations.
 
 {templates_section.strip()}
 
@@ -204,7 +224,8 @@ Make this patient unique — vary age, gender, severity, comorbidities, and clin
 """.strip()
 
         raw = self.llm(JOURNEY_GENERATOR_SYSTEM, user_msg)
-        return PatientJourney.model_validate(extract_json(raw))
+        data = extract_json(raw)
+        return PatientJourney.model_validate(data)
 
 
 class ResourceComposerAgent:
@@ -284,7 +305,7 @@ PATIENT: {journey.patient_id}, age {journey.age}, {journey.gender}
 SUMMARY: {journey.narrative}
 
 PRE-MAPPED FIELD VALUES (use these directly — look up codes for coded fields):
-{json.dumps(journey.field_values, indent=2)}
+{json.dumps(journey.compositions.get(analysis.template_id, {}), indent=2)}
 
 {error_section}
 Use the terminology tools to look up correct codes before populating coded fields.
@@ -386,12 +407,19 @@ def extract_json(text: str) -> dict:
     raise ValueError("Unterminated JSON in LLM output")
 
 
-def _format_elements(elements: list[DataElement]) -> str:
+def _format_elements(elements: list[DataElement], slim: bool = False) -> str:
+    """Format elements for prompt injection.
+
+    slim=True omits allowed_codes (used for journey generation — the LLM writes
+    display terms and the composer handles code lookup, so the code list wastes tokens).
+    """
     if not elements:
         return "(none)"
     lines = []
     for el in elements:
-        line = f"  - {el.path} [{el.data_type}] ({el.cardinality})"
+        repeatable = el.cardinality not in ("0..1", "1..1", "1")
+        card_str = f"{el.cardinality} *** REPEATABLE — use [0],[1],… indexes ***" if repeatable else el.cardinality
+        line = f"  - {el.path} [{el.data_type}] ({card_str})"
 
         if el.description:
             line += f"\n      Description: {el.description}"
@@ -400,16 +428,17 @@ def _format_elements(elements: list[DataElement]) -> str:
             for k, v in el.annotations.items():
                 line += f"\n      Annotation [{k}]: {v}"
 
-        if el.allowed_codes:
-            codes_preview = ", ".join(
-                f"{c.value}={c.label}" for c in el.allowed_codes[:6]
-            )
-            if len(el.allowed_codes) > 6:
-                codes_preview += f" … (+{len(el.allowed_codes) - 6} more)"
-            line += f"\n      Allowed codes: {codes_preview}"
-        elif el.value_set_url:
-            term = f" ({el.terminology})" if el.terminology else ""
-            line += f"\n      ValueSet: {el.value_set_url}{term}"
+        if not slim:
+            if el.allowed_codes:
+                codes_preview = ", ".join(
+                    f"{c.value}={c.label}" for c in el.allowed_codes[:6]
+                )
+                if len(el.allowed_codes) > 6:
+                    codes_preview += f" … (+{len(el.allowed_codes) - 6} more)"
+                line += f"\n      Allowed codes: {codes_preview}"
+            elif el.value_set_url:
+                term = f" ({el.terminology})" if el.terminology else ""
+                line += f"\n      ValueSet: {el.value_set_url}{term}"
 
         if el.constraints:
             for c in el.constraints:
