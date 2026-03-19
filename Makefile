@@ -1,9 +1,9 @@
-.PHONY: setup popu generate analyze 
+.PHONY: setup popu generate analyze
 
-# One-time setup: install Python deps and watch terminology loading progress
+# Install Python deps and load terminology into Snowstorm
 setup:
 	cd agents && python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt
-	cd agents && .venv/bin/python setup.py
+	cd agents && .venv/bin/python setup.py  # loads SNOMED/LOINC/ICD-10, then watches progress
 
 # Start interactive generation
 popu:
