@@ -20,8 +20,10 @@ from typing import Annotated, Optional
 
 import typer
 import yaml
+from collections import defaultdict
+
 from rich.console import Console
-from rich.table import Table
+from rich.tree import Tree
 
 from models import ResourceFormat, TemplateType
 from pipeline import Pipeline
@@ -34,6 +36,28 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+
+
+def _print_results(results) -> None:
+    """Print generation results grouped per patient with file paths."""
+    by_patient: dict[str, list] = defaultdict(list)
+    for r in results:
+        by_patient[r.patient_id].append(r)
+
+    tree = Tree("[bold]Generated files[/bold]")
+    for patient_id, resources in by_patient.items():
+        all_valid = all(r.valid for r in resources)
+        status = "[green]✓[/green]" if all_valid else "[red]✗[/red]"
+        patient_node = tree.add(f"{status} [bold cyan]{patient_id}[/bold cyan]")
+        for r in resources:
+            valid_str = "[green]✓[/green]" if r.valid else "[red]✗[/red]"
+            issues_str = f"  [yellow]{len(r.validation_issues)} issue(s)[/yellow]" if r.validation_issues else ""
+            attempts_str = f"  attempt {r.generation_attempt}" if r.generation_attempt > 1 else ""
+            file_str = r.output_path or "[dim]not saved[/dim]"
+            label = f"{valid_str} [dim]{r.template_id}[/dim]{attempts_str}{issues_str}"
+            template_node = patient_node.add(label)
+            template_node.add(f"[dim]{file_str}[/dim]")
+    console.print(tree)
 
 
 def load_config(config_path: Path | None) -> dict:
@@ -200,17 +224,7 @@ def run(
         upload=upload,
     )
 
-    table = Table(title="Generation Results")
-    table.add_column("Patient")
-    table.add_column("Template")
-    table.add_column("Attempts")
-    table.add_column("Valid")
-    table.add_column("Issues")
-    for r in results:
-        valid_str = "[green]✓[/green]" if r.valid else "[red]✗[/red]"
-        table.add_row(r.patient_id, r.template_id, str(r.generation_attempt),
-                      valid_str, str(len(r.validation_issues)))
-    console.print(table)
+    _print_results(results)
 
 @app.command()
 def generate(
@@ -258,24 +272,7 @@ def generate(
         ig_path=ig,
     )
 
-    # Print result table
-    table = Table(title="Generation Results")
-    table.add_column("Patient")
-    table.add_column("Template")
-    table.add_column("Attempts")
-    table.add_column("Valid")
-    table.add_column("Issues")
-
-    for r in results:
-        valid_str = "[green]✓[/green]" if r.valid else "[red]✗[/red]"
-        table.add_row(
-            r.patient_id,
-            r.template_id,
-            str(r.generation_attempt),
-            valid_str,
-            str(len(r.validation_issues)),
-        )
-    console.print(table)
+    _print_results(results)
 
 
 @app.command()

@@ -4,7 +4,7 @@ Shared data models for the EHR Populator agent pipeline.
 
 from __future__ import annotations
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 
@@ -144,3 +144,4 @@ class GeneratedResource(BaseModel):
     generation_attempt: int = 1
     valid: bool = False
     validation_issues: list[ValidationIssue] = Field(default_factory=list)
+    output_path: Optional[str] = None  # Set after saving to disk
