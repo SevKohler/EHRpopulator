@@ -50,7 +50,10 @@ class Pipeline:
         validator_cfg = config.get("validator", {})
 
         self.terminology = TerminologyTools(
-            base_url=terminology_cfg.get("base_url", "http://localhost:8080/fhir"),
+            snomed_url=terminology_cfg.get("snomed_url",
+                       terminology_cfg.get("base_url", "http://localhost:8085/fhir")),
+            loinc_url=terminology_cfg.get("loinc_url",
+                      terminology_cfg.get("base_url", "https://tx.fhir.org/r4")),
             bearer_token=terminology_cfg.get("bearer_token")
                          or os.environ.get("TERMINOLOGY_TOKEN"),
         )

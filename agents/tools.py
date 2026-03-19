@@ -21,12 +21,24 @@ from typing import Any
 
 class TerminologyTools:
     """
-    Tools for looking up clinical codes from a FHIR terminology server.
-    Default: https://tx.fhir.org/r4
+    Tools for looking up clinical codes.
+
+    Uses two servers:
+    - snomed_url: Snowstorm (SNOMED CT native API + FHIR endpoint)
+    - loinc_url:  tx.fhir.org or another FHIR tx server for LOINC, ICD-10, etc.
+
+    If only one URL is configured both route to it.
     """
 
-    def __init__(self, base_url: str, bearer_token: str | None = None):
-        self.base_url = base_url.rstrip("/")
+    def __init__(
+        self,
+        base_url: str = "https://tx.fhir.org/r4",
+        bearer_token: str | None = None,
+        snomed_url: str | None = None,
+        loinc_url: str | None = None,
+    ):
+        self.snomed_base = (snomed_url or base_url).rstrip("/")
+        self.loinc_base = (loinc_url or base_url).rstrip("/")
         self.headers = {"Accept": "application/fhir+json"}
         if bearer_token:
             self.headers["Authorization"] = f"Bearer {bearer_token}"
@@ -58,11 +70,11 @@ class TerminologyTools:
         Use this to find SNOMED codes for diagnoses, procedures, and findings.
         """
         params = {
-            "url": "http://snomed.info/sct",
+            "url": "http://snomed.info/sct?fhir_vs",
             "filter": description,
             "count": "5",
         }
-        return self._get("/ValueSet/$expand", params)
+        return self._get("/ValueSet/$expand", params, server="snomed")
 
     def search_loinc(self, description: str) -> str:
         """
@@ -74,7 +86,7 @@ class TerminologyTools:
             "filter": description,
             "count": "5",
         }
-        return self._get("/ValueSet/$expand", params)
+        return self._get("/ValueSet/$expand", params, server="loinc")
 
     def validate_code(self, system: str, code: str, value_set_url: str) -> str:
         """
@@ -83,6 +95,34 @@ class TerminologyTools:
         """
         params = {"url": value_set_url, "system": system, "code": code}
         return self._get("/ValueSet/$validate-code", params)
+
+    def expand_value_set(self, value_set_url: str, filter: str = "") -> str:
+        """
+        Expand a FHIR ValueSet to get valid codes. Use before populating any coded clinical field.
+        Returns JSON with code, display, and system for each concept.
+        """
+        params = {"url": value_set_url, "count": "20"}
+        if filter:
+            params["filter"] = filter
+        # Route SNOMED ValueSets to Snowstorm, everything else to loinc/tx server
+        server = "snomed" if "snomed" in value_set_url else "loinc"
+        return self._get("/ValueSet/$expand", params, server=server)
+
+    def lookup_code(self, system: str, code: str) -> str:
+        """
+        Look up a specific code in a code system to verify it is valid and get its display name.
+        """
+        params = {"system": system, "code": code}
+        server = "snomed" if "snomed" in system else "loinc"
+        return self._get("/CodeSystem/$lookup", params, server=server)
+
+    def validate_code(self, system: str, code: str, value_set_url: str) -> str:
+        """
+        Validate whether a code is valid in a given ValueSet.
+        """
+        params = {"url": value_set_url, "system": system, "code": code}
+        server = "snomed" if "snomed" in system else "loinc"
+        return self._get("/ValueSet/$validate-code", params, server=server)
 
     def snomed_ecl(self, ecl: str, limit: int = 10) -> str:
         """
@@ -96,7 +136,7 @@ class TerminologyTools:
         """
         params = {"ecl": ecl, "limit": str(limit), "active": "true"}
         # Snowstorm native API: /browser/concepts  (not FHIR)
-        snowstorm_base = self.base_url.replace("/fhir", "")
+        snowstorm_base = self.snomed_base.replace("/fhir", "")
         try:
             r = requests.get(
                 f"{snowstorm_base}/browser/concepts",
@@ -108,9 +148,10 @@ class TerminologyTools:
         except Exception as e:
             return json.dumps({"error": str(e)})
 
-    def _get(self, path: str, params: dict) -> str:
+    def _get(self, path: str, params: dict, server: str = "loinc") -> str:
+        base = self.snomed_base if server == "snomed" else self.loinc_base
         try:
-            r = requests.get(self.base_url + path, params=params,
+            r = requests.get(base + path, params=params,
                              headers=self.headers, timeout=15)
             return r.text
         except Exception as e:
