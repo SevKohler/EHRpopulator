@@ -1,0 +1,152 @@
+version: "3.8"
+
+# Local development stack for EHR Populator.
+# Starts: EHRbase, FHIR server, Snowstorm (SNOMED CT terminology), and the Java validator.
+#
+# Usage:
+#   docker compose up -d ehrbase fhir snowstorm  # start servers
+#   docker compose up -d validator               # start Java validator after building it
+#   docker compose logs -f snowstorm             # wait for Snowstorm to finish loading
+#
+# Snowstorm requires a SNOMED CT RF2 release file to be loaded before use.
+# See: https://github.com/IHTSDO/snowstorm
+
+services:
+
+  # -------------------------------------------------------------------------
+  # EHRbase — openEHR clinical data repository
+  # -------------------------------------------------------------------------
+  ehrbase-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ehrbase
+      POSTGRES_PASSWORD: ehrbase
+      POSTGRES_DB: ehrbase
+    volumes:
+      - ehrbase-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ehrbase"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ehrbase:
+    image: ehrbase/ehrbase:latest
+    depends_on:
+      ehrbase-db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      DB_URL: jdbc:postgresql://ehrbase-db:5432/ehrbase
+      DB_USER: ehrbase
+      DB_PASS: ehrbase
+      SERVER_NODENAME: local.ehrbase.org
+      SECURITY_AUTHTYPE: BASIC
+      SECURITY_AUTHUSER: ehrbase-user
+      SECURITY_AUTHPASSWORD: SuperSecretPassword
+      SECURITY_AUTHADMINUSER: ehrbase-admin
+      SECURITY_AUTHADMINPASSWORD: EvenMoreSecretPassword
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/ehrbase/rest/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # -------------------------------------------------------------------------
+  # HAPI FHIR Server — FHIR R4 server for resource storage
+  # -------------------------------------------------------------------------
+  fhir:
+    image: hapiproject/hapi:latest
+    ports:
+      - "8090:8080"
+    environment:
+      hapi.fhir.fhir_version: R4
+      hapi.fhir.allow_multiple_delete: "true"
+      hapi.fhir.reuse_cached_search_results_millis: "-1"
+    volumes:
+      - fhir-data:/data/hapi
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/fhir/metadata"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
+  # -------------------------------------------------------------------------
+  # Snowstorm — SNOMED CT terminology server
+  # Exposes both native API and FHIR R4 terminology endpoints.
+  #
+  # IMPORTANT: Snowstorm needs a SNOMED CT RF2 release loaded before use.
+  # After starting, import via:
+  #   curl -X POST "http://localhost:8085/imports" \
+  #     -H "Content-Type: application/json" \
+  #     -d '{"branchPath":"MAIN","createCodeSystemVersion":true}' \
+  #     # Then upload the RF2 zip file to the returned import URL
+  #
+  # Or use the Snowstorm browser UI at http://localhost:8085
+  # -------------------------------------------------------------------------
+  snowstorm-es:
+    image: elasticsearch:8.11.1
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+    volumes:
+      - snowstorm-es-data:/usr/share/elasticsearch/data
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  snowstorm:
+    image: snomedinternational/snowstorm:latest
+    depends_on:
+      snowstorm-es:
+        condition: service_healthy
+    ports:
+      - "8085:8080"   # Native Snowstorm API + browser
+      - "8086:8080"   # FHIR endpoint (same port, different path: /fhir)
+    environment:
+      - elasticsearch.urls=http://snowstorm-es:9200
+    command: >
+      --elasticsearch.urls=http://snowstorm-es:9200
+      --spring.config.location=classpath:application.properties
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/branches"]
+      interval: 15s
+      timeout: 10s
+      retries: 30
+
+  # -------------------------------------------------------------------------
+  # Java Validator Service — HAPI FHIR + openEHR SDK validation
+  # Build first: cd validator && mvn package -DskipTests
+  # -------------------------------------------------------------------------
+  validator:
+    build:
+      context: ./validator
+      dockerfile: Dockerfile
+    ports:
+      - "8181:8181"
+    environment:
+      VALIDATOR_EHRBASE_ENABLED: "true"
+      VALIDATOR_EHRBASE_BASE_URL: "http://ehrbase:8080/ehrbase"
+      VALIDATOR_EHRBASE_PASSWORD: "SuperSecretPassword"
+      VALIDATOR_FHIR_TERMINOLOGY_SERVER_URL: "http://snowstorm:8080/fhir"
+    depends_on:
+      - ehrbase
+      - snowstorm
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8181/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  ehrbase-db-data:
+  fhir-data:
+  snowstorm-es-data:

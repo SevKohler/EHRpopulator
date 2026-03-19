@@ -32,6 +32,9 @@ output/
 ehrbase.env
 fhir-server.env
 
+# Claude Code
+.claude/
+
 # IDE
 .vscode/
 .idea/

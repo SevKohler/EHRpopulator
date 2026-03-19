@@ -1,0 +1,23 @@
+# Core agent framework
+anthropic>=0.40.0          # Anthropic Claude (primary LLM)
+openai>=1.54.0             # OpenAI / Azure OpenAI / Codex
+
+# HTTP
+httpx>=0.27.0              # Async HTTP client
+requests>=2.32.0           # Sync HTTP (for simple tool calls)
+
+# Data
+pydantic>=2.9.0            # Model validation and serialization
+lxml>=5.3.0                # OPT XML parsing
+xmltodict>=0.14.2          # OPT XML -> dict
+
+# CLI
+typer[all]>=0.13.0         # CLI interface
+rich>=13.9.0               # Pretty terminal output
+
+# Config
+pyyaml>=6.0.1              # YAML config
+python-dotenv>=1.0.1       # .env file support
+
+# Retry
+tenacity>=9.0.0            # Retry with backoff

@@ -1,0 +1,49 @@
+# EHR Populator Agent Configuration
+# Copy to config.local.yaml and fill in secrets, or use environment variables.
+
+llm:
+  provider: anthropic          # anthropic | openai | azure | ollama
+  model: claude-opus-4-5       # Model to use for all agents
+  # api_key: set via ANTHROPIC_API_KEY env var (preferred over hardcoding)
+  temperature: 0.7
+  max_tokens: 8192
+  # For OpenAI / Azure:
+  # base_url: https://your-endpoint.openai.azure.com
+  # deployment: your-deployment-name
+
+  # Optional: use a different (cheaper) model for the template analyzer
+  # template_analyzer_model: claude-haiku-4-5-20251001
+
+# Java validation service (run: cd validator && mvn spring-boot:run)
+validator:
+  base_url: "http://localhost:8181"
+
+# EHRbase openEHR server (for uploading generated compositions)
+ehrbase:
+  enabled: false
+  base_url: "http://localhost:8080/ehrbase"
+  username: "ehrbase-user"
+  # password: set via EHRBASE_PASSWORD env var
+
+# FHIR server (for uploading generated FHIR resources)
+fhir_server:
+  enabled: false
+  base_url: "http://localhost:8090/fhir"
+  # bearer_token: set via FHIR_BEARER_TOKEN env var
+
+# Snowstorm terminology server (for SNOMED CT code lookups in the composer agent).
+# Snowstorm exposes both native API (/browser/concepts, /concepts) and FHIR endpoints (/fhir).
+# The FHIR base_url is used for ValueSet/$expand, CodeSystem/$lookup etc.
+# The native ECL search tool strips /fhir from the URL automatically.
+#
+# Local Snowstorm (via docker compose): http://localhost:8085/fhir
+# Public browser (read-only, no SNOMED license required for testing):
+#   https://browser.ihtsdotools.org/snowstorm/snomed-ct/fhir
+terminology:
+  base_url: "http://localhost:8085/fhir"
+  # bearer_token: set via TERMINOLOGY_TOKEN env var (not needed for local Snowstorm)
+
+pipeline:
+  max_retries: 5             # Max validation retry attempts per composition
+  output_dir: "../output"    # Where to write generated files
+  save_intermediate: true    # Save after each successful generation

@@ -1,0 +1,28 @@
+server:
+  port: 8181
+
+spring:
+  application:
+    name: ehr-validator
+
+validator:
+  fhir:
+    # Snowstorm FHIR endpoint for code validation during FHIR validation.
+    # Snowstorm exposes FHIR R4 terminology services at /fhir.
+    # Local (docker compose): http://localhost:8085/fhir
+    # Set to empty string to disable remote terminology checks.
+    terminology-server-url: "http://localhost:8085/fhir"
+
+  ehrbase:
+    # EHRbase server for server-side openEHR composition validation.
+    # If enabled: false, only SDK-level offline validation is performed.
+    enabled: false
+    base-url: "http://localhost:8080/ehrbase"
+    username: "ehrbase-user"
+    password: "${EHRBASE_PASSWORD:SuperSecretPassword}"
+
+logging:
+  level:
+    root: INFO
+    org.ehrpopulator: DEBUG
+    ca.uhn.fhir: WARN

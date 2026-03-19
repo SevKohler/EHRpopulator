@@ -1,0 +1,178 @@
+"""
+LLM provider abstraction. Supports Anthropic Claude, OpenAI, and Azure OpenAI.
+Returns a callable that takes (system_prompt, user_message, tools) and returns text.
+"""
+
+from __future__ import annotations
+import os
+from typing import Any, Callable
+
+import anthropic
+import openai
+
+
+def build_llm(config: dict) -> Callable:
+    """
+    Build an LLM callable from config.
+
+    Returns a function with signature:
+        call(system: str, user: str, tools: list[dict] | None = None) -> str
+    """
+    provider = config.get("provider", "anthropic").lower()
+
+    if provider == "anthropic":
+        return _anthropic_client(config)
+    elif provider in ("openai", "azure"):
+        return _openai_client(config)
+    else:
+        raise ValueError(f"Unknown LLM provider: {provider}. Supported: anthropic, openai, azure")
+
+
+def _anthropic_client(config: dict) -> Callable:
+    api_key = config.get("api_key") or os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY not set")
+
+    client = anthropic.Anthropic(api_key=api_key)
+    model = config.get("model", "claude-opus-4-5")
+    max_tokens = config.get("max_tokens", 8192)
+    temperature = config.get("temperature", 0.7)
+
+    def call(system: str, user: str, tools: list[dict] | None = None) -> str:
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+        if tools:
+            kwargs["tools"] = tools
+
+        # Agentic loop: handle tool_use responses
+        messages = [{"role": "user", "content": user}]
+        while True:
+            response = client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system,
+                messages=messages,
+                tools=tools or [],
+            )
+
+            if response.stop_reason == "end_turn" or not tools:
+                # Extract text from response
+                for block in response.content:
+                    if hasattr(block, "text"):
+                        return block.text
+                return ""
+
+            if response.stop_reason == "tool_use":
+                # Process tool calls and continue
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        result = _dispatch_tool(block.name, block.input,
+                                                kwargs.get("_tool_handlers", {}))
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": str(result),
+                        })
+
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": tool_results})
+            else:
+                # Unexpected stop reason
+                break
+
+        return ""
+
+    return call
+
+
+def _openai_client(config: dict) -> Callable:
+    provider = config.get("provider", "openai").lower()
+
+    if provider == "azure":
+        api_key = config.get("api_key") or os.environ.get("AZURE_OPENAI_KEY")
+        client = openai.AzureOpenAI(
+            api_key=api_key,
+            azure_endpoint=config["base_url"],
+            api_version="2024-08-01-preview",
+        )
+        model = config.get("deployment") or config.get("model")
+    else:
+        api_key = config.get("api_key") or os.environ.get("OPENAI_API_KEY")
+        client = openai.OpenAI(api_key=api_key)
+        model = config.get("model", "gpt-4o")
+
+    max_tokens = config.get("max_tokens", 8192)
+    temperature = config.get("temperature", 0.7)
+
+    def call(system: str, user: str, tools: list[dict] | None = None) -> str:
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": messages,
+        }
+        if tools:
+            # Convert Anthropic-style tool defs to OpenAI format
+            kwargs["tools"] = [_to_openai_tool(t) for t in tools]
+            kwargs["tool_choice"] = "auto"
+
+        while True:
+            response = client.chat.completions.create(**kwargs)
+            choice = response.choices[0]
+
+            if choice.finish_reason == "stop":
+                return choice.message.content or ""
+
+            if choice.finish_reason == "tool_calls" and tools:
+                tool_calls = choice.message.tool_calls
+                kwargs["messages"].append(choice.message)
+                for tc in tool_calls:
+                    import json
+                    result = _dispatch_tool(tc.function.name,
+                                           json.loads(tc.function.arguments),
+                                           kwargs.get("_tool_handlers", {}))
+                    kwargs["messages"].append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": str(result),
+                    })
+            else:
+                break
+
+        return ""
+
+    return call
+
+
+def _dispatch_tool(name: str, inputs: dict, handlers: dict) -> str:
+    handler = handlers.get(name)
+    if handler is None:
+        return f"Error: tool '{name}' not found"
+    try:
+        return str(handler(**inputs))
+    except Exception as e:
+        return f"Error calling tool '{name}': {e}"
+
+
+def _to_openai_tool(anthropic_tool: dict) -> dict:
+    """Convert Anthropic tool definition format to OpenAI function format."""
+    return {
+        "type": "function",
+        "function": {
+            "name": anthropic_tool["name"],
+            "description": anthropic_tool.get("description", ""),
+            "parameters": anthropic_tool.get("input_schema", {"type": "object", "properties": {}}),
+        },
+    }
