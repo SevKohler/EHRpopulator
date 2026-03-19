@@ -30,15 +30,8 @@ class TerminologyTools:
     If only one URL is configured both route to it.
     """
 
-    def __init__(
-        self,
-        base_url: str = "https://tx.fhir.org/r4",
-        bearer_token: str | None = None,
-        snomed_url: str | None = None,
-        loinc_url: str | None = None,
-    ):
-        self.snomed_base = (snomed_url or base_url).rstrip("/")
-        self.loinc_base = (loinc_url or base_url).rstrip("/")
+    def __init__(self, base_url: str = "http://localhost:8085/fhir", bearer_token: str | None = None):
+        self.base_url = base_url.rstrip("/")
         self.headers = {"Accept": "application/fhir+json"}
         if bearer_token:
             self.headers["Authorization"] = f"Bearer {bearer_token}"
@@ -105,24 +98,19 @@ class TerminologyTools:
         if filter:
             params["filter"] = filter
         # Route SNOMED ValueSets to Snowstorm, everything else to loinc/tx server
-        server = "snomed" if "snomed" in value_set_url else "loinc"
-        return self._get("/ValueSet/$expand", params, server=server)
+        return self._get("/ValueSet/$expand", params)
 
     def lookup_code(self, system: str, code: str) -> str:
         """
         Look up a specific code in a code system to verify it is valid and get its display name.
         """
-        params = {"system": system, "code": code}
-        server = "snomed" if "snomed" in system else "loinc"
-        return self._get("/CodeSystem/$lookup", params, server=server)
+        return self._get("/CodeSystem/$lookup", {"system": system, "code": code})
 
     def validate_code(self, system: str, code: str, value_set_url: str) -> str:
         """
         Validate whether a code is valid in a given ValueSet.
         """
-        params = {"url": value_set_url, "system": system, "code": code}
-        server = "snomed" if "snomed" in system else "loinc"
-        return self._get("/ValueSet/$validate-code", params, server=server)
+        return self._get("/ValueSet/$validate-code", {"url": value_set_url, "system": system, "code": code})
 
     def snomed_ecl(self, ecl: str, limit: int = 10) -> str:
         """
@@ -136,7 +124,7 @@ class TerminologyTools:
         """
         params = {"ecl": ecl, "limit": str(limit), "active": "true"}
         # Snowstorm native API: /browser/concepts  (not FHIR)
-        snowstorm_base = self.snomed_base.replace("/fhir", "")
+        snowstorm_base = self.base_url.replace("/fhir", "")
         try:
             r = requests.get(
                 f"{snowstorm_base}/browser/concepts",
@@ -148,10 +136,9 @@ class TerminologyTools:
         except Exception as e:
             return json.dumps({"error": str(e)})
 
-    def _get(self, path: str, params: dict, server: str = "loinc") -> str:
-        base = self.snomed_base if server == "snomed" else self.loinc_base
+    def _get(self, path: str, params: dict) -> str:
         try:
-            r = requests.get(base + path, params=params,
+            r = requests.get(self.base_url + path, params=params,
                              headers=self.headers, timeout=15)
             return r.text
         except Exception as e:

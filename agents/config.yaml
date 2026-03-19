@@ -31,23 +31,12 @@ fhir_server:
   base_url: "http://localhost:8090/fhir"
   # bearer_token: set via FHIR_BEARER_TOKEN env var
 
-# Terminology servers.
-# SNOMED CT → Snowstorm (local or public IHTSDO browser)
-# LOINC, ICD-10, others → tx.fhir.org (free, no setup)
-#
-# The tools route automatically: SNOMED queries → snomed_url, everything else → loinc_url.
-# If you only set base_url both route there.
+# Snowstorm terminology server — handles SNOMED CT, LOINC, and other loaded code systems.
+# Load SNOMED CT (RF2) and LOINC into Snowstorm before running the pipeline.
+# Local (docker compose): http://localhost:8085/fhir
 terminology:
-  # Snowstorm FHIR endpoint. Local (docker compose): http://localhost:8085/fhir
-  # Public IHTSDO browser (no license needed for testing, rate-limited):
-  #   https://browser.ihtsdotools.org/snowstorm/snomed-ct/fhir
-  snomed_url: "http://localhost:8085/fhir"
-
-  # FHIR tx server for LOINC, ICD-10, and other terminologies.
-  # tx.fhir.org is free and always available — no setup required.
-  loinc_url: "https://tx.fhir.org/r4"
-
-  # bearer_token: set via TERMINOLOGY_TOKEN env var (not needed for local Snowstorm or tx.fhir.org)
+  base_url: "http://localhost:8085/fhir"
+  # bearer_token: set via TERMINOLOGY_TOKEN env var (not needed for local Snowstorm)
 
 pipeline:
   max_retries: 5             # Max validation retry attempts per composition
