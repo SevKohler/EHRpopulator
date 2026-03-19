@@ -29,8 +29,12 @@ output/
 *.parquet
 
 # Terminology files (large binaries — load locally, never commit)
-terminology/*
-!terminology/README.md
+terminology/seeds/*
+!terminology/seeds/README.md
+!terminology/seeds/.gitkeep
+terminology/fhir/*
+!terminology/fhir/README.md
+!terminology/fhir/.gitkeep
 
 # EHRbase / FHIR server local config
 ehrbase.env

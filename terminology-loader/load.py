@@ -1,183 +1,217 @@
 #!/usr/bin/env python3
 """
-Terminology loader — runs once at container startup.
+Terminology loader — runs at container startup.
 
-Scans /terminology for files and loads them into Snowstorm:
-  SnomedCT_*.zip        → SNOMED CT RF2 import
-  Loinc_*.json          → LOINC FHIR CodeSystem
-  icd10*.json / icd-10*.json → ICD-10 FHIR CodeSystem
-  *.json (other)        → Generic FHIR CodeSystem or ValueSet POST
+Two folders with different reload behaviour:
 
-Already-loaded code systems are detected via Snowstorm's FHIR API
-and skipped — safe to restart without re-loading.
+  /terminology/seeds/    SNOMED CT RF2 zips, LOINC JSON, ICD-10 JSON
+                         Loaded ONCE. State tracked in seeds/.loaded.
+                         Never reloaded unless .loaded is deleted.
 
-State is also persisted to /terminology/.loaded so restarts are instant.
+  /terminology/fhir/     Your own FHIR CodeSystems and ValueSets.
+                         Reloaded on EVERY restart — safe for small files
+                         you iterate on frequently.
+
+Supported file types:
+  *.zip   → SNOMED CT RF2 import (seeds only)
+  *.json  → FHIR CodeSystem or ValueSet POST
 """
 
 import json
 import os
 import sys
 import time
-import glob
 import requests
 
-SNOWSTORM = os.environ.get("SNOWSTORM_URL", "http://snowstorm:8080")
-FHIR_BASE = f"{SNOWSTORM}/fhir"
-TERMINOLOGY_DIR = "/terminology"
-STATE_FILE = os.path.join(TERMINOLOGY_DIR, ".loaded")
+SNOWSTORM_URL = os.environ.get("SNOWSTORM_URL", "http://snowstorm:8080")
+FHIR_BASE = f"{SNOWSTORM_URL}/fhir"
+SEEDS_DIR = "/terminology/seeds"
+FHIR_DIR = "/terminology/fhir"
+STATE_FILE = os.path.join(SEEDS_DIR, ".loaded")
 
+
+# ---------------------------------------------------------------------------
+# Snowstorm health
+# ---------------------------------------------------------------------------
 
 def wait_for_snowstorm(timeout=300):
     print("Waiting for Snowstorm...", flush=True)
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            r = requests.get(f"{SNOWSTORM}/branches", timeout=5)
-            if r.status_code == 200:
-                print("Snowstorm is ready.", flush=True)
+            if requests.get(f"{SNOWSTORM_URL}/branches", timeout=5).status_code == 200:
+                print("Snowstorm ready.\n", flush=True)
                 return
         except Exception:
             pass
         time.sleep(5)
-    print("ERROR: Snowstorm did not become ready in time.", flush=True)
+    print("ERROR: Snowstorm did not become ready.", flush=True)
     sys.exit(1)
 
+
+# ---------------------------------------------------------------------------
+# State helpers (seeds only)
+# ---------------------------------------------------------------------------
 
 def load_state() -> set:
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE) as f:
-            return set(line.strip() for line in f if line.strip())
+            return set(l.strip() for l in f if l.strip())
     return set()
 
 
 def save_state(loaded: set):
     with open(STATE_FILE, "w") as f:
-        for entry in sorted(loaded):
-            f.write(entry + "\n")
+        for name in sorted(loaded):
+            f.write(name + "\n")
 
 
-def already_in_snowstorm(system_url: str) -> bool:
-    """Check if a CodeSystem is already loaded in Snowstorm."""
+# ---------------------------------------------------------------------------
+# Snowstorm checks
+# ---------------------------------------------------------------------------
+
+def code_system_exists(url: str) -> bool:
     try:
         r = requests.get(f"{FHIR_BASE}/CodeSystem",
-                         params={"url": system_url}, timeout=10)
-        data = r.json()
-        return data.get("total", 0) > 0
+                         params={"url": url}, timeout=10)
+        return r.json().get("total", 0) > 0
     except Exception:
         return False
 
 
-def load_snomed(zip_path: str, loaded: set) -> bool:
+# ---------------------------------------------------------------------------
+# Loaders
+# ---------------------------------------------------------------------------
+
+def load_snomed(zip_path: str, loaded: set):
     name = os.path.basename(zip_path)
     if name in loaded:
-        print(f"  SNOMED: {name} already loaded (state file), skipping.", flush=True)
-        return True
-    if already_in_snowstorm("http://snomed.info/sct"):
-        print(f"  SNOMED: already in Snowstorm, skipping {name}.", flush=True)
+        print(f"  [seeds] SKIP {name} (already loaded)", flush=True)
+        return
+    if code_system_exists("http://snomed.info/sct"):
+        print(f"  [seeds] SKIP {name} (SNOMED already in Snowstorm)", flush=True)
         loaded.add(name)
-        return True
+        save_state(loaded)
+        return
 
-    print(f"  SNOMED: importing {name} (this takes 20-60 min)...", flush=True)
-    # Create import job
-    r = requests.post(f"{SNOWSTORM}/imports",
+    print(f"  [seeds] Importing SNOMED CT from {name} — this takes 20-60 min...", flush=True)
+
+    r = requests.post(f"{SNOWSTORM_URL}/imports",
                       json={"branchPath": "MAIN", "createCodeSystemVersion": True},
                       timeout=30)
     if r.status_code not in (200, 201):
-        print(f"  ERROR creating SNOMED import job: {r.status_code} {r.text}", flush=True)
-        return False
+        print(f"  ERROR creating import job: {r.status_code} {r.text[:200]}", flush=True)
+        return
 
     import_id = r.json()["id"]
-    print(f"  Import job: {import_id}", flush=True)
+    print(f"  Import job ID: {import_id}", flush=True)
 
-    # Upload the RF2 zip
     with open(zip_path, "rb") as f:
-        r = requests.post(f"{SNOWSTORM}/imports/{import_id}/archive",
+        r = requests.post(f"{SNOWSTORM_URL}/imports/{import_id}/archive",
                           files={"file": (name, f, "application/zip")},
-                          timeout=7200)  # 2h timeout for upload + import
+                          timeout=7200)
     if r.status_code not in (200, 201):
         print(f"  ERROR uploading RF2: {r.status_code} {r.text[:200]}", flush=True)
-        return False
+        return
 
-    # Poll until complete
-    print(f"  Polling import status...", flush=True)
     while True:
         time.sleep(30)
-        r = requests.get(f"{SNOWSTORM}/imports/{import_id}", timeout=10)
-        status = r.json().get("status", "UNKNOWN")
+        status = requests.get(f"{SNOWSTORM_URL}/imports/{import_id}",
+                              timeout=10).json().get("status", "UNKNOWN")
         print(f"  Status: {status}", flush=True)
         if status == "COMPLETED":
-            print(f"  SNOMED loaded successfully.", flush=True)
+            print(f"  SNOMED CT loaded.\n", flush=True)
             loaded.add(name)
-            return True
+            save_state(loaded)
+            return
         elif status in ("FAILED", "CANCELLED"):
-            print(f"  SNOMED import failed: {r.text[:200]}", flush=True)
-            return False
+            print(f"  SNOMED import failed.\n", flush=True)
+            return
 
 
-def load_fhir_resource(json_path: str, loaded: set) -> bool:
+def load_fhir_json(json_path: str, *, always_reload: bool = False) -> bool:
     name = os.path.basename(json_path)
-    if name in loaded:
-        print(f"  {name}: already loaded (state file), skipping.", flush=True)
-        return True
-
-    with open(json_path, encoding="utf-8") as f:
-        resource = json.load(f)
+    try:
+        with open(json_path, encoding="utf-8") as f:
+            resource = json.load(f)
+    except Exception as e:
+        print(f"  ERROR reading {name}: {e}", flush=True)
+        return False
 
     rt = resource.get("resourceType", "")
-    url = resource.get("url", "")
-
     if rt not in ("CodeSystem", "ValueSet"):
-        print(f"  {name}: not a CodeSystem or ValueSet (resourceType={rt}), skipping.", flush=True)
+        print(f"  SKIP {name}: resourceType is '{rt}', expected CodeSystem or ValueSet", flush=True)
         return True
 
-    if url and already_in_snowstorm(url):
-        print(f"  {name}: {url} already in Snowstorm, skipping.", flush=True)
-        loaded.add(name)
+    url = resource.get("url", name)
+
+    if not always_reload and rt == "CodeSystem" and code_system_exists(url):
+        print(f"  [seeds] SKIP {name}: {url} already in Snowstorm", flush=True)
         return True
 
-    print(f"  Loading {rt}: {url or name}...", flush=True)
+    print(f"  Loading {rt}: {url}...", flush=True)
     r = requests.post(f"{FHIR_BASE}/{rt}",
                       headers={"Content-Type": "application/fhir+json"},
                       json=resource,
                       timeout=300)
     if r.status_code in (200, 201):
-        print(f"  Loaded {name} successfully.", flush=True)
-        loaded.add(name)
+        print(f"  OK: {name}", flush=True)
         return True
     else:
-        print(f"  ERROR loading {name}: {r.status_code} {r.text[:300]}", flush=True)
+        print(f"  ERROR {r.status_code}: {r.text[:300]}", flush=True)
         return False
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main():
     wait_for_snowstorm()
-    loaded = load_state()
 
-    files = sorted(os.listdir(TERMINOLOGY_DIR))
-    if not any(f for f in files if not f.startswith(".") and not f.endswith(".md")):
-        print("No terminology files found in /terminology — nothing to load.", flush=True)
-        print("Drop your files there and restart this service.", flush=True)
-        return
+    # --- Seeds (load once) ---
+    if os.path.isdir(SEEDS_DIR):
+        seed_files = [f for f in sorted(os.listdir(SEEDS_DIR))
+                      if not f.startswith(".") and not f.endswith(".md")]
 
-    for filename in files:
-        if filename.startswith(".") or filename.endswith(".md"):
-            continue
+        if seed_files:
+            print("=== Seeds (load once) ===", flush=True)
+            loaded = load_state()
 
-        filepath = os.path.join(TERMINOLOGY_DIR, filename)
-
-        if filename.endswith(".zip"):
-            # SNOMED CT RF2
-            load_snomed(filepath, loaded)
-            save_state(loaded)
-
-        elif filename.endswith(".json"):
-            load_fhir_resource(filepath, loaded)
-            save_state(loaded)
-
+            for filename in seed_files:
+                path = os.path.join(SEEDS_DIR, filename)
+                if filename.endswith(".zip"):
+                    load_snomed(path, loaded)
+                elif filename.endswith(".json"):
+                    if filename in loaded:
+                        print(f"  [seeds] SKIP {filename} (already loaded)", flush=True)
+                    else:
+                        if load_fhir_json(path, always_reload=False):
+                            loaded.add(filename)
+                            save_state(loaded)
+                else:
+                    print(f"  SKIP {filename}: unknown extension", flush=True)
         else:
-            print(f"  Skipping unknown file type: {filename}", flush=True)
+            print("Seeds folder is empty — nothing to load.", flush=True)
+    else:
+        print("No seeds/ folder found, skipping.", flush=True)
 
-    print("Terminology loading complete.", flush=True)
+    # --- FHIR (always reload) ---
+    if os.path.isdir(FHIR_DIR):
+        fhir_files = [f for f in sorted(os.listdir(FHIR_DIR))
+                      if not f.startswith(".") and not f.endswith(".md")
+                      and f.endswith(".json")]
+
+        if fhir_files:
+            print("\n=== FHIR CodeSystems / ValueSets (always reload) ===", flush=True)
+            for filename in fhir_files:
+                load_fhir_json(os.path.join(FHIR_DIR, filename), always_reload=True)
+        else:
+            print("\nFHIR folder is empty — nothing to reload.", flush=True)
+    else:
+        print("No fhir/ folder found, skipping.", flush=True)
+
+    print("\nDone.", flush=True)
 
 
 if __name__ == "__main__":

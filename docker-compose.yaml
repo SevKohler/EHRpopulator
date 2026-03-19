@@ -113,13 +113,14 @@ services:
     build:
       context: ./terminology-loader
     volumes:
-      - ./terminology:/terminology
+      - ./terminology/seeds:/terminology/seeds  # loaded once, state tracked in .loaded
+      - ./terminology/fhir:/terminology/fhir    # reloaded on every restart
     environment:
       SNOWSTORM_URL: http://snowstorm:8080
     depends_on:
       snowstorm:
         condition: service_healthy
-    restart: "no"   # runs once and exits — restart manually to re-scan
+    restart: "no"   # runs once and exits — use: docker compose restart terminology-loader
 
   # -------------------------------------------------------------------------
   # Java validator service — HAPI FHIR + EHRbase SDK
