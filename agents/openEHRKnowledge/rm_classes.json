@@ -1,0 +1,983 @@
+{
+  "metadata": {
+    "source": "OpenEHR Specifications",
+    "documents": [
+      "EHR Information Model (107 pages)",
+      "Common Information Model (84 pages)"
+    ],
+    "extraction_date": "2026-03-19",
+    "note": "Data value types (DV_*) are not included in the provided Common IM PDF. They are part of a separate Data Types specification document not included in this extraction."
+  },
+  "ehr_information_model": {
+    "composition": {
+      "name": "COMPOSITION",
+      "parent_class": "LOCATABLE",
+      "description": "Content of one version in a VERSIONED_COMPOSITION. A Composition is considered the unit of modification of the record, the unit of transmission in record Extracts, and the unit of attestation by authorising clinicians.",
+      "when_to_use": "Use as the primary container for clinical information within an EHR. Recommended to populate the inherited uid attribute with the object_id from the enclosing VERSION object.",
+      "attributes": [
+        {
+          "name": "language",
+          "type": "CODE_PHRASE",
+          "multiplicity": "1..1",
+          "description": "Mandatory indicator of the localised language in which this Composition is written. Coded from openEHR Code Set languages.",
+          "notes": "Language of an Entry if different from the Composition is indicated in ENTRY.language"
+        },
+        {
+          "name": "territory",
+          "type": "CODE_PHRASE",
+          "multiplicity": "1..1",
+          "description": "Name of territory in which this Composition was written. Coded from openEHR countries code set (ISO 3166 standard).",
+          "notes": ""
+        },
+        {
+          "name": "category",
+          "type": "DV_CODED_TEXT",
+          "multiplicity": "1..1",
+          "description": "Temporal category of this Composition: 431|persistent| (potential life-time validity), 451|episodic| (valid over the life of a care episode), or 433|event| (valid at the time of recording).",
+          "notes": "Coded from openEHR 'category' group"
+        },
+        {
+          "name": "context",
+          "type": "EVENT_CONTEXT",
+          "multiplicity": "0..1",
+          "description": "The clinical session context of this Composition, i.e. the contextual attributes of the clinical session.",
+          "notes": ""
+        },
+        {
+          "name": "composer",
+          "type": "PARTY_PROXY",
+          "multiplicity": "1..1",
+          "description": "The person primarily responsible for the content of the Composition. May be the patient (using PARTY_SELF instance).",
+          "notes": "This is the identifier which should appear on the screen"
+        },
+        {
+          "name": "content",
+          "type": "List<CONTENT_ITEM>",
+          "multiplicity": "0..1",
+          "description": "The content of this Composition.",
+          "notes": ""
+        }
+      ],
+      "functions": [
+        {
+          "name": "is_persistent",
+          "return_type": "Boolean",
+          "description": "True if category is 431|persistent|, False otherwise. Useful for finding Compositions guaranteed to be of interest to most users."
+        }
+      ],
+      "invariants": [
+        "Category_validity: terminology (Terminology_id_openehr).has_code_for_group_id (Group_id_composition_category, category.defining_code)",
+        "Territory_valid: code_set(Code_set_id_countries).has_code(territory)",
+        "Language_valid: code_set(Code_set_id_languages).has_code(language)",
+        "Content_valid: content /= Void implies not content.is_empty",
+        "Is_archetype_root: is_archetype_root"
+      ]
+    },
+    "event_context": {
+      "name": "EVENT_CONTEXT",
+      "parent_class": "PATHABLE",
+      "description": "Documents the context information of a healthcare event involving the subject of care and the health system. Healthcare events include patient contacts and any other business activity such as pathology investigations.",
+      "when_to_use": "Use to record contextual information about clinical sessions and healthcare events. The context information recorded here is independent of the version audit attributes.",
+      "attributes": [
+        {
+          "name": "start_time",
+          "type": "DV_DATE_TIME",
+          "multiplicity": "1..1",
+          "description": "Start time of the clinical session or other kind of event during which a provider performs a service for the patient.",
+          "notes": ""
+        },
+        {
+          "name": "end_time",
+          "type": "DV_DATE_TIME",
+          "multiplicity": "0..1",
+          "description": "Optional end time of the clinical session.",
+          "notes": ""
+        },
+        {
+          "name": "location",
+          "type": "String",
+          "multiplicity": "0..1",
+          "description": "The actual location where the session occurred, e.g. 'microbiology lab 2', 'home', 'ward A3'.",
+          "notes": ""
+        },
+        {
+          "name": "setting",
+          "type": "DV_CODED_TEXT",
+          "multiplicity": "1..1",
+          "description": "The setting in which the clinical session took place. Coded using the openEHR Terminology, setting group.",
+          "notes": ""
+        },
+        {
+          "name": "other_context",
+          "type": "ITEM_STRUCTURE",
+          "multiplicity": "0..1",
+          "description": "Other optional context which will be archetyped.",
+          "notes": ""
+        },
+        {
+          "name": "health_care_facility",
+          "type": "PARTY_IDENTIFIED",
+          "multiplicity": "0..1",
+          "description": "The health care facility under whose care the event took place. The most specific workgroup or delivery unit within a care delivery enterprise.",
+          "notes": "Used to ensure medico-legal accountability"
+        },
+        {
+          "name": "participations",
+          "type": "List<PARTICIPATION>",
+          "multiplicity": "0..1",
+          "description": "Parties involved in the healthcare event, typically including physicians and sometimes the patient.",
+          "notes": ""
+        }
+      ],
+      "functions": [],
+      "invariants": [
+        "Setting_valid: Terminology (Terminology_id_openehr).has_code_for_group_id (Group_id_setting, setting.defining_code)",
+        "Participations_validity: participations /= Void implies not participations.is_empty",
+        "location_valid: location /= Void implies not location.is_empty"
+      ]
+    },
+    "entry": {
+      "name": "ENTRY",
+      "parent_class": "CONTENT_ITEM",
+      "description": "Abstract parent of all ENTRY subtypes. An ENTRY is the root of a logical item of hard clinical information created in the clinical statement context, within a clinical session.",
+      "when_to_use": "Use as the base class for all clinical entries. ENTRY is the minimal unit of information any query should return.",
+      "abstract": true,
+      "attributes": [
+        {
+          "name": "language",
+          "type": "CODE_PHRASE",
+          "multiplicity": "1..1",
+          "description": "Mandatory indicator of the localised language in which this Entry is written. Coded from openEHR Code Set languages.",
+          "notes": ""
+        },
+        {
+          "name": "encoding",
+          "type": "CODE_PHRASE",
+          "multiplicity": "1..1",
+          "description": "Name of character set in which text values in this Entry are encoded. Coded from openEHR Code Set character sets.",
+          "notes": ""
+        },
+        {
+          "name": "other_participations",
+          "type": "List<PARTICIPATION>",
+          "multiplicity": "0..1",
+          "description": "Other participations at ENTRY level.",
+          "notes": ""
+        },
+        {
+          "name": "workflow_id",
+          "type": "OBJECT_REF",
+          "multiplicity": "0..1",
+          "description": "Identifier of externally held workflow engine data for this workflow execution.",
+          "notes": ""
+        },
+        {
+          "name": "subject",
+          "type": "PARTY_PROXY",
+          "multiplicity": "1..1",
+          "description": "Id of human subject of this ENTRY (organ donor, foetus, family member, or other clinically relevant person).",
+          "notes": ""
+        },
+        {
+          "name": "provider",
+          "type": "PARTY_PROXY",
+          "multiplicity": "0..1",
+          "description": "Optional identification of provider of the information in this ENTRY (patient, patient agent, clinician, device or software).",
+          "notes": "Generally only used when the recorder needs to make it explicit"
+        }
+      ],
+      "functions": [
+        {
+          "name": "subject_is_self",
+          "return_type": "Boolean",
+          "description": "Returns True if this Entry is about the subject of the EHR (subject attribute is of type PARTY_SELF)."
+        }
+      ],
+      "invariants": [
+        "Language_valid: code_set (Code_set_id_languages).has_code (language)",
+        "Encoding_valid: code_set (Code_set_id_character_sets).has_code (encoding)",
+        "Subject_validity: subject_is_self implies subject.generating_type = 'PARTY_SELF'",
+        "Other_participations_valid: other_participations /= Void implies not other_participations.is_empty",
+        "Is_archetype_root: is_archetype_root"
+      ]
+    },
+    "admin_entry": {
+      "name": "ADMIN_ENTRY",
+      "parent_class": "ENTRY",
+      "description": "Entry subtype for administrative information, i.e. information about setting up the clinical process, but not itself clinically relevant.",
+      "when_to_use": "Use for administrative details of admission, episode, ward location, discharge, and appointment information. Not to be used for any clinically significant information.",
+      "abstract": false,
+      "attributes": [
+        {
+          "name": "data",
+          "type": "ITEM_STRUCTURE",
+          "multiplicity": "1..1",
+          "description": "Content of the Admin Entry. The data of the Entry; modelled in archetypes.",
+          "notes": ""
+        }
+      ],
+      "functions": [],
+      "invariants": []
+    },
+    "care_entry": {
+      "name": "CARE_ENTRY",
+      "parent_class": "ENTRY",
+      "description": "Abstract parent of all clinical ENTRY subtypes. A CARE_ENTRY defines protocol and guideline attributes for all clinical Entry subtypes.",
+      "when_to_use": "Use as the base class for all clinically significant entries (OBSERVATION, EVALUATION, INSTRUCTION, ACTION).",
+      "abstract": true,
+      "attributes": [
+        {
+          "name": "protocol",
+          "type": "ITEM_STRUCTURE",
+          "multiplicity": "0..1",
+          "description": "Description of the method (how) the information in this entry was arrived at. For OBSERVATIONs, description of method or instrument. For EVALUATIONs, how the evaluation was arrived at. For INSTRUCTIONs, how to execute.",
+          "notes": "May take the form of references to guidelines, knowledge references, or clinical reasons"
+        },
+        {
+          "name": "guideline_id",
+          "type": "OBJECT_REF",
+          "multiplicity": "0..1",
+          "description": "Optional external identifier of guideline creating this Entry if relevant.",
+          "notes": ""
+        }
+      ],
+      "functions": [],
+      "invariants": []
+    },
+    "observation": {
+      "name": "OBSERVATION",
+      "parent_class": "CARE_ENTRY",
+      "description": "Entry subtype for all clinical data in the past or present. OBSERVATION data is expressed using HISTORY<T>, guaranteeing it is situated in time. Used for all notionally objective (measured) observations and patient-reported phenomena.",
+      "when_to_use": "Use for recording measured or observed data. Not for opinions, future statements, instructions, intentions, or plans.",
+      "abstract": false,
+      "attributes": [
+        {
+          "name": "data",
+          "type": "HISTORY<ITEM_STRUCTURE>",
+          "multiplicity": "1..1",
+          "description": "The data of this observation, in the form of a history of values which may be of any complexity.",
+          "notes": ""
+        },
+        {
+          "name": "state",
+          "type": "HISTORY<ITEM_STRUCTURE>",
+          "multiplicity": "0..1",
+          "description": "Optional recording of the state of subject during the observation process, in the form of a separate history of values.",
+          "notes": "State may also be recorded within the History of the data attribute"
+        }
+      ],
+      "functions": [],
+      "invariants": []
+    },
+    "evaluation": {
+      "name": "EVALUATION",
+      "parent_class": "CARE_ENTRY",
+      "description": "Entry type for evaluation statements. Used for all kinds of statements which evaluate other information, such as interpretations, diagnoses, differential diagnoses, hypotheses, risk assessments, goals and plans.",
+      "when_to_use": "Use for evaluation and interpretation of information. Should not be used for actionable statements such as medication orders (use INSTRUCTION instead).",
+      "abstract": false,
+      "attributes": [
+        {
+          "name": "data",
+          "type": "ITEM_STRUCTURE",
+          "multiplicity": "1..1",
+          "description": "The data of this evaluation, in the form of a spatial data structure.",
+          "notes": ""
+        }
+      ],
+      "functions": [],
+      "invariants": []
+    },
+    "instruction": {
+      "name": "INSTRUCTION",
+      "parent_class": "CARE_ENTRY",
+      "description": "Used to specify actions in the future. Enables simple and complex specifications to be expressed, including in a fully-computable workflow form. Used for any actionable statement such as medication and therapeutic orders, monitoring, recall and review.",
+      "when_to_use": "Use for any actionable statement (medication orders, therapeutic orders, monitoring). Enough details must be provided for the specification to be directly executed by an actor.",
+      "abstract": false,
+      "attributes": [
+        {
+          "name": "narrative",
+          "type": "DV_TEXT",
+          "multiplicity": "1..1",
+          "description": "Mandatory human-readable version of what the Instruction is about.",
+          "notes": ""
+        },
+        {
+          "name": "expiry_time",
+          "type": "DV_DATE_TIME",
+          "multiplicity": "0..1",
+          "description": "Optional expiry date/time to assist determination of when an Instruction can be assumed to have expired.",
+          "notes": "Helps prevent false listing of Instructions as Active"
+        },
+        {
+          "name": "wf_definition",
+          "type": "DV_PARSABLE",
+          "multiplicity": "0..1",
+          "description": "Optional workflow engine executable expression of the Instruction.",
+          "notes": ""
+        },
+        {
+          "name": "activities",
+          "type": "List<ACTIVITY>",
+          "multiplicity": "0..1",
+          "description": "List of all activities in Instruction.",
+          "notes": ""
+        }
+      ],
+      "functions": [],
+      "invariants": [
+        "Activities_valid: activities /= Void implies not activities.is_empty"
+      ]
+    },
+    "activity": {
+      "name": "ACTIVITY",
+      "parent_class": "LOCATABLE",
+      "description": "Defines a single activity within an Instruction, such as a medication administration.",
+      "when_to_use": "Use to specify individual activities that make up the larger Instruction. Each Activity corresponds to a single ActionTypical example is a medication administration.",
+      "abstract": false,
+      "attributes": [
+        {
+          "name": "timing",
+          "type": "DV_PARSABLE",
+          "multiplicity": "0..1",
+          "description": "Timing of the activity, in the form of a parsable string. Preferred syntax is ISO8601 'R' format, but other formats may be used including HL7 GTS.",
+          "notes": "May be omitted if timing is represented structurally or unavailable (legacy data)"
+        },
+        {
+          "name": "action_archetype_id",
+          "type": "String",
+          "multiplicity": "1..1",
+          "description": "Perl-compliant regular expression pattern indicating the valid identifiers of archetypes for Actions corresponding to this Activity specification.",
+          "notes": "Defaults to /.*/,meaning any archetype"
+        },
+        {
+          "name": "description",
+          "type": "ITEM_STRUCTURE",
+          "multiplicity": "1..1",
+          "description": "Description of the activity, in the form of an archetyped structure.",
+          "notes": ""
+        }
+      ],
+      "functions": [],
+      "invariants": [
+        "Action_archetype_id_valid: not action_archetype_id.is_empty"
+      ]
+    },
+    "action": {
+      "name": "ACTION",
+      "parent_class": "CARE_ENTRY",
+      "description": "Used to record a clinical action that has been performed, which may have been ad hoc or due to the execution of an Activity in an Instruction workflow. Every Action corresponds to a careflow step.",
+      "when_to_use": "Use to record that an action has been performed. Actions may be performed ad hoc or as a result of executing an Instruction. Use to document careflow steps and state machine transitions.",
+      "abstract": false,
+      "attributes": [
+        {
+          "name": "time",
+          "type": "DV_DATE_TIME",
+          "multiplicity": "1..1",
+          "description": "Point in time at which this action completed.",
+          "notes": ""
+        },
+        {
+          "name": "ism_transition",
+          "type": "ISM_TRANSITION",
+          "multiplicity": "1..1",
+          "description": "Details of transition in the Instruction state machine caused by this Action.",
+          "notes": ""
+        },
+        {
+          "name": "instruction_details",
+          "type": "INSTRUCTION_DETAILS",
+          "multiplicity": "0..1",
+          "description": "Details of the Instruction that caused this Action to be performed, if there was one.",
+          "notes": ""
+        },
+        {
+          "name": "description",
+          "type": "ITEM_STRUCTURE",
+          "multiplicity": "1..1",
+          "description": "Description of the action that has been performed, in the form of an archetyped structure.",
+          "notes": ""
+        }
+      ],
+      "functions": [],
+      "invariants": []
+    },
+    "instruction_details": {
+      "name": "INSTRUCTION_DETAILS",
+      "parent_class": "PATHABLE",
+      "description": "Used to record details of the Instruction causing an Action.",
+      "when_to_use": "Use within ACTION to reference the source Instruction and specify which Activity within that Instruction caused the Action to be performed.",
+      "abstract": false,
+      "attributes": [
+        {
+          "name": "instruction_id",
+          "type": "LOCATABLE_REF",
+          "multiplicity": "1..1",
+          "description": "Reference to causing Instruction.",
+          "notes": ""
+        },
+        {
+          "name": "activity_id",
+          "type": "String",
+          "multiplicity": "1..1",
+          "description": "Identifier of Activity within Instruction, in the form of its archetype path.",
+          "notes": ""
+        },
+        {
+          "name": "wf_details",
+          "type": "ITEM_STRUCTURE",
+          "multiplicity": "0..1",
+          "description": "Various workflow engine state details, potentially including condition that fired, notifications, and other workflow engine state.",
+          "notes": "Structure and semantics not currently defined"
+        }
+      ],
+      "functions": [],
+      "invariants": [
+        "Activity_path_valid: not activity_id.is_empty"
+      ]
+    },
+    "ism_transition": {
+      "name": "ISM_TRANSITION",
+      "parent_class": "PATHABLE",
+      "description": "Model of a transition in the Instruction State Machine (ISM), caused by a careflow step. The attributes document the careflow step as well as the ISM transition.",
+      "when_to_use": "Use within ACTION to record the state machine transition and careflow step that resulted from executing an action in response to an Instruction.",
+      "abstract": false,
+      "attributes": [
+        {
+          "name": "current_state",
+          "type": "DV_CODED_TEXT",
+          "multiplicity": "1..1",
+          "description": "The ISM current state. Coded by openEHR terminology group Instruction states.",
+          "notes": ""
+        },
+        {
+          "name": "transition",
+          "type": "DV_CODED_TEXT",
+          "multiplicity": "0..1",
+          "description": "The ISM transition which occurred to arrive in the current_state. Coded by openEHR terminology group Instruction transitions.",
+          "notes": ""
+        },
+        {
+          "name": "careflow_step",
+          "type": "DV_CODED_TEXT",
+          "multiplicity": "0..1",
+          "description": "The step in the careflow process which occurred as part of generating this action (e.g. 'dispense', 'start_administration'). Represents the clinical label for the activity.",
+          "notes": "Defined in archetype; represents clinical form vs. current_state which represents ISM computable form"
+        },
+        {
+          "name": "reason",
+          "type": "List<DV_TEXT>",
+          "multiplicity": "0..1",
+          "description": "Optional possibility of adding one or more reasons for this careflow step having been taken.",
+          "notes": "Multiple reasons may occur in medication management"
+        }
+      ],
+      "functions": [],
+      "invariants": [
+        "Current_state_valid: terminology (Terminology_id_openehr).has_code_for_group_id (Group_id_instruction_states, current_state.defining_code)",
+        "Transition_valid: transition /= Void implies terminology (Terminology_id_openehr).has_code_for_group_id (Group_id_instruction_transitions, transition.defining_code)"
+      ]
+    }
+  },
+  "common_information_model": {
+    "archetyped_package": {
+      "pathable": {
+        "name": "PATHABLE",
+        "parent_class": "Any",
+        "description": "The PATHABLE class defines the pathing capabilities used by nearly all classes in the openEHR reference model. PATHABLE objects can locate child objects using paths and know their parent object in a compositional hierarchy.",
+        "when_to_use": "Use as the base class for hierarchical data structures. PATHABLE provides the infrastructure for navigating archetyped structures using paths.",
+        "abstract": true,
+        "attributes": [],
+        "functions": [
+          {
+            "name": "parent",
+            "return_type": "PATHABLE",
+            "description": "Parent of this node in a compositional hierarchy."
+          },
+          {
+            "name": "item_at_path",
+            "return_type": "Any",
+            "description": "The item at a path (relative to this item); only valid for unique paths.",
+            "parameters": "a_path: String"
+          },
+          {
+            "name": "items_at_path",
+            "return_type": "List<Any>",
+            "description": "List of items corresponding to a non-unique path.",
+            "parameters": "a_path: String"
+          },
+          {
+            "name": "path_exists",
+            "return_type": "Boolean",
+            "description": "True if the path exists in the data with respect to the current item.",
+            "parameters": "a_path: String"
+          },
+          {
+            "name": "path_unique",
+            "return_type": "Boolean",
+            "description": "True if the path corresponds to a single item in the data.",
+            "parameters": "a_path: String"
+          },
+          {
+            "name": "path_of_item",
+            "return_type": "String",
+            "description": "The path to an item relative to the root of this archetyped structure.",
+            "parameters": "a_loc: PATHABLE"
+          }
+        ],
+        "invariants": []
+      },
+      "locatable": {
+        "name": "LOCATABLE",
+        "parent_class": "PATHABLE",
+        "description": "Root class of all information model classes that can be archetyped. Most classes in the openEHR reference model inherit from LOCATABLE, which defines the idea of locatability in an archetyped structure.",
+        "when_to_use": "Use as the base class for all archetyped content. LOCATABLE provides runtime naming and archetype node identification.",
+        "abstract": true,
+        "attributes": [
+          {
+            "name": "name",
+            "type": "DV_TEXT",
+            "multiplicity": "1..1",
+            "description": "Runtime name of this fragment, used to build runtime paths. The term provided via a clinical application to name this EHR construct.",
+            "notes": "Retention in the EHR faithfully preserves the original label by which this entry was known to end users"
+          },
+          {
+            "name": "archetype_node_id",
+            "type": "String",
+            "multiplicity": "1..1",
+            "description": "Design-time archetype identifier of this node taken from its generating archetype; used to build archetype paths. Always in the form of an at-code (e.g., at0005).",
+            "notes": "At archetype root, value is always stringified form of archetype_id from archetype_details"
+          },
+          {
+            "name": "uid",
+            "type": "UID_BASED_ID",
+            "multiplicity": "0..1",
+            "description": "Optional globally unique object identifier for root points of archetyped structures.",
+            "notes": ""
+          },
+          {
+            "name": "links",
+            "type": "List<LINK>",
+            "multiplicity": "0..1",
+            "description": "Links to other archetyped structures (data whose root object inherits from ARCHETYPED, such as ENTRY, SECTION).",
+            "notes": "Links may be to structures in other compositions"
+          },
+          {
+            "name": "archetype_details",
+            "type": "ARCHETYPED",
+            "multiplicity": "0..1",
+            "description": "Details of archetyping used on this node.",
+            "notes": ""
+          },
+          {
+            "name": "feeder_audit",
+            "type": "FEEDER_AUDIT",
+            "multiplicity": "0..1",
+            "description": "Audit trail from non-openEHR system of original commit of information, or from a conversion gateway.",
+            "notes": ""
+          }
+        ],
+        "functions": [
+          {
+            "name": "concept",
+            "return_type": "DV_TEXT",
+            "description": "Clinical concept of the archetype as a whole (derived from the archetype_node_id of the root node)."
+          },
+          {
+            "name": "is_archetype_root",
+            "return_type": "Boolean",
+            "description": "True if this node is the root of an archetyped structure."
+          }
+        ],
+        "invariants": [
+          "Links_valid: links /= Void implies not links.is_empty",
+          "Archetyped_valid: is_archetype_root xor archetype_details = Void",
+          "Archetype_node_id_valid: not archetype_node_id.is_empty"
+        ]
+      },
+      "archetyped": {
+        "name": "ARCHETYPED",
+        "parent_class": "None",
+        "description": "Archetypes act as the configuration basis for the particular structures of instances defined by the reference model. An instance of ARCHETYPED contains the relevant archetype identification information.",
+        "when_to_use": "Use to document the archetype and template information used to create an archetyped data structure.",
+        "abstract": false,
+        "attributes": [
+          {
+            "name": "archetype_id",
+            "type": "ARCHETYPE_ID",
+            "multiplicity": "1..1",
+            "description": "Globally unique archetype identifier.",
+            "notes": ""
+          },
+          {
+            "name": "template_id",
+            "type": "TEMPLATE_ID",
+            "multiplicity": "0..1",
+            "description": "Globally unique template identifier, if a template was active at this point in the structure.",
+            "notes": "Normally used at the top of a top-level structure, but templates may be used at lower levels"
+          },
+          {
+            "name": "rm_version",
+            "type": "String",
+            "multiplicity": "1..1",
+            "description": "Version of the openEHR reference model used to create this object (e.g., 1.0, 1.2.4).",
+            "notes": ""
+          }
+        ],
+        "functions": [],
+        "invariants": [
+          "Rm_version_valid: not rm_version.is_empty"
+        ]
+      },
+      "link": {
+        "name": "LINK",
+        "parent_class": "None",
+        "description": "The LINK type defines a logical relationship between two items, such as two ENTRYs or an ENTRY and a COMPOSITION. Links can be used across compositions and across EHRs.",
+        "when_to_use": "Use to represent logical relationships between archetyped structures. Links should be between archetyped structures only (whole ENTRYs, SECTIONs, COMPOSITIONs).",
+        "abstract": false,
+        "attributes": [
+          {
+            "name": "meaning",
+            "type": "DV_TEXT",
+            "multiplicity": "1..1",
+            "description": "Used to describe the relationship, usually in clinical terms (e.g., 'in response to', 'follow-up to').",
+            "notes": "Categories include generic, documenting, reporting, organisational, clinical, circumstancial, and view management"
+          },
+          {
+            "name": "type",
+            "type": "DV_TEXT",
+            "multiplicity": "1..1",
+            "description": "The type attribute indicates a clinical or domain-level meaning (e.g., 'problem', 'issue').",
+            "notes": "Can be used to categorize which links must be followed or can be broken when extracts are created"
+          },
+          {
+            "name": "target",
+            "type": "DV_EHR_URI",
+            "multiplicity": "1..1",
+            "description": "The logical target object in the link relation.",
+            "notes": ""
+          }
+        ],
+        "functions": [],
+        "invariants": []
+      },
+      "feeder_audit": {
+        "name": "FEEDER_AUDIT",
+        "parent_class": "None",
+        "description": "Defines the semantics of an audit trail which is constructed to describe the origin of data that have been transformed into openEHR form and committed to the system.",
+        "when_to_use": "Use to document the origin and transformation of data from non-openEHR systems. Provides traceability for data conversion and integration.",
+        "abstract": false,
+        "attributes": [
+          {
+            "name": "originating_system_item_ids",
+            "type": "List<DV_IDENTIFIER>",
+            "multiplicity": "0..1",
+            "description": "Identifiers used for the item in the originating system (e.g., filler and placer ids).",
+            "notes": ""
+          },
+          {
+            "name": "feeder_system_item_ids",
+            "type": "List<DV_IDENTIFIER>",
+            "multiplicity": "0..1",
+            "description": "Identifiers used for the item in the feeder system, where distinct from the originating system.",
+            "notes": ""
+          },
+          {
+            "name": "original_content",
+            "type": "DV_ENCAPSULATED",
+            "multiplicity": "0..1",
+            "description": "Optional inline inclusion of or reference to original content corresponding to the openEHR content. Typically a URI reference to a document or message.",
+            "notes": ""
+          },
+          {
+            "name": "originating_system_audit",
+            "type": "FEEDER_AUDIT_DETAILS",
+            "multiplicity": "1..1",
+            "description": "Audit information for the information item from the originating system.",
+            "notes": ""
+          },
+          {
+            "name": "feeder_system_audit",
+            "type": "FEEDER_AUDIT_DETAILS",
+            "multiplicity": "0..1",
+            "description": "Audit information for the information item from the feeder system, if different from originating system.",
+            "notes": ""
+          }
+        ],
+        "functions": [],
+        "invariants": []
+      },
+      "feeder_audit_details": {
+        "name": "FEEDER_AUDIT_DETAILS",
+        "parent_class": "None",
+        "description": "Audit details for any system in a feeder system chain. Represents the general notion of who/where/when the information item was created. None of the attributes is mandatory, though various combinations will usually be mandatory in different scenarios.",
+        "when_to_use": "Use to document audit information from legacy systems or conversion gateways. Provides the where/when/who context for data transformation.",
+        "abstract": false,
+        "attributes": [
+          {
+            "name": "system_id",
+            "type": "String",
+            "multiplicity": "1..1",
+            "description": "Identifier of the system which handled the information item. The IT system owned by the organisation legally responsible.",
+            "notes": ""
+          },
+          {
+            "name": "location",
+            "type": "PARTY_IDENTIFIED",
+            "multiplicity": "0..1",
+            "description": "Identifier of the particular site/facility within an organisation which handled the item.",
+            "notes": "For computability, needs to be a PKI identifier in the PARTY_IDENTIFIED identifier list"
+          },
+          {
+            "name": "subject",
+            "type": "PARTY_PROXY",
+            "multiplicity": "0..1",
+            "description": "Identifiers for subject of the received information item.",
+            "notes": ""
+          },
+          {
+            "name": "provider",
+            "type": "PARTY_IDENTIFIED",
+            "multiplicity": "0..1",
+            "description": "Provider(s) who created, committed, forwarded or otherwise handled the item.",
+            "notes": ""
+          },
+          {
+            "name": "time",
+            "type": "DV_DATE_TIME",
+            "multiplicity": "0..1",
+            "description": "Time of handling the item. For originating system, time of creation; for feeder system, time of accession or handling.",
+            "notes": ""
+          },
+          {
+            "name": "version_id",
+            "type": "String",
+            "multiplicity": "0..1",
+            "description": "Any identifier used in the system such as 'interim', 'final', or numeric versions if available.",
+            "notes": ""
+          }
+        ],
+        "functions": [],
+        "invariants": []
+      }
+    },
+    "generic_package": {
+      "party_proxy": {
+        "name": "PARTY_PROXY",
+        "parent_class": "None",
+        "description": "Abstract concept of a proxy description of a party, including an optional link to data for this party in a demographic or other identity management system.",
+        "when_to_use": "Use as the base class for party references in the EHR. Subtyped into PARTY_IDENTIFIED and PARTY_SELF.",
+        "abstract": true,
+        "attributes": [
+          {
+            "name": "external_ref",
+            "type": "PARTY_REF",
+            "multiplicity": "0..1",
+            "description": "Optional reference to more detailed demographic or identification information for this party in an external system.",
+            "notes": ""
+          }
+        ],
+        "functions": [],
+        "invariants": []
+      },
+      "party_self": {
+        "name": "PARTY_SELF",
+        "parent_class": "PARTY_PROXY",
+        "description": "Party proxy representing the subject of the record. Used to indicate that the party is the owner of the record.",
+        "when_to_use": "Use to represent the patient or subject of the EHR. May or may not have external_ref set.",
+        "abstract": false,
+        "attributes": [],
+        "functions": [],
+        "invariants": []
+      },
+      "party_identified": {
+        "name": "PARTY_IDENTIFIED",
+        "parent_class": "PARTY_PROXY",
+        "description": "Proxy data for an identified party other than the subject of the record, minimally consisting of identifiers and optional link to external data. There must be at least one of name, identifier or external_ref present.",
+        "when_to_use": "Use to describe parties where only identifiers may be known (e.g., healthcare providers, institutions). Should not be used to include patient identifying information.",
+        "abstract": false,
+        "attributes": [
+          {
+            "name": "name",
+            "type": "String",
+            "multiplicity": "0..1",
+            "description": "Optional human-readable name in String form.",
+            "notes": ""
+          },
+          {
+            "name": "identifiers",
+            "type": "List<DV_IDENTIFIER>",
+            "multiplicity": "0..1",
+            "description": "One or more formal identifiers (possibly computable).",
+            "notes": ""
+          }
+        ],
+        "functions": [],
+        "invariants": [
+          "Basic_validity: name /= Void or identifiers /= Void or external_ref /= Void",
+          "Name_valid: name /= Void implies not name.is_empty",
+          "Identifiers_valid: identifiers /= Void implies not identifiers.is_empty"
+        ]
+      },
+      "party_related": {
+        "name": "PARTY_RELATED",
+        "parent_class": "PARTY_IDENTIFIED",
+        "description": "Proxy type for identifying a party and its relationship to the subject of the record. Use where the relationship between the party and the subject must be known.",
+        "when_to_use": "Use when recording participations where the relationship to the subject is clinically important (e.g., parent of child patient).",
+        "abstract": false,
+        "attributes": [
+          {
+            "name": "relationship",
+            "type": "DV_CODED_TEXT",
+            "multiplicity": "1..1",
+            "description": "Relationship of subject of this ENTRY to the subject of the record. May be coded. If the party is the patient, coded as 'self'.",
+            "notes": ""
+          }
+        ],
+        "functions": [],
+        "invariants": [
+          "Relationship_valid: terminology (Terminology_id_openehr).has_code_for_group_id (Group_id_subject_relationship, relationship.defining_code)"
+        ]
+      },
+      "participation": {
+        "name": "PARTICIPATION",
+        "parent_class": "None",
+        "description": "Model of a participation of a Party (any Actor or Role) in an activity. Used to represent any participation of a Party in an activity not explicitly in the model (e.g., assisting nurse). Can record past or future participations.",
+        "when_to_use": "Use to record any participation of a party in a healthcare activity. Should not be used in place of more permanent relationships between demographic entities.",
+        "abstract": false,
+        "attributes": [
+          {
+            "name": "function",
+            "type": "DV_TEXT",
+            "multiplicity": "1..1",
+            "description": "The function of the Party in this participation. A given party might participate in more than one way in a particular activity.",
+            "notes": "Should be coded but cannot be limited to HL7v3:ParticipationFunction vocabulary"
+          },
+          {
+            "name": "mode",
+            "type": "DV_CODED_TEXT",
+            "multiplicity": "0..1",
+            "description": "Optional field for the 'mode' of the performer/activity interaction (e.g., present, by telephone, by email).",
+            "notes": ""
+          },
+          {
+            "name": "performer",
+            "type": "PARTY_PROXY",
+            "multiplicity": "1..1",
+            "description": "The id and possibly demographic system link of the party participating in the activity.",
+            "notes": ""
+          },
+          {
+            "name": "time",
+            "type": "DV_INTERVAL<DV_DATE_TIME>",
+            "multiplicity": "0..1",
+            "description": "The time interval during which the participation took place (observational context) or intended time (future contexts).",
+            "notes": ""
+          }
+        ],
+        "functions": [],
+        "invariants": [
+          "Function_valid: function.generating_type.is_equal ('DV_CODED_TEXT') implies terminology (Terminology_id_openehr).has_code_for_group_id (Group_id_participation_function, function.defining_code)",
+          "Mode_valid: mode /= Void implies terminology (Terminology_id_openehr).has_code_for_group_id (Group_id_participation_mode, mode.defining_code)"
+        ]
+      },
+      "audit_details": {
+        "name": "AUDIT_DETAILS",
+        "parent_class": "None",
+        "description": "The set of attributes required to document the committal of an information item to a repository.",
+        "when_to_use": "Use to document system-level audit information for all changes committed to the EHR system.",
+        "abstract": false,
+        "attributes": [
+          {
+            "name": "system_id",
+            "type": "String",
+            "multiplicity": "1..1",
+            "description": "Identifier of the logical EHR system where the change was committed. Owned by the organisation legally responsible for the EHR.",
+            "notes": "Distinct from any application or hosting infrastructure"
+          },
+          {
+            "name": "time_committed",
+            "type": "DV_DATE_TIME",
+            "multiplicity": "1..1",
+            "description": "Time of committal of the item.",
+            "notes": ""
+          },
+          {
+            "name": "change_type",
+            "type": "DV_CODED_TEXT",
+            "multiplicity": "1..1",
+            "description": "Type of change. Coded using the openEHR Terminology audit change type group.",
+            "notes": ""
+          },
+          {
+            "name": "description",
+            "type": "DV_TEXT",
+            "multiplicity": "0..1",
+            "description": "Reason for committal. May qualify the change_type value (e.g., 'Folder added').",
+            "notes": ""
+          },
+          {
+            "name": "committer",
+            "type": "PARTY_PROXY",
+            "multiplicity": "1..1",
+            "description": "Identity and optional reference into identity management service of user who committed the item.",
+            "notes": ""
+          }
+        ],
+        "functions": [],
+        "invariants": [
+          "System_id_valid: not system_id.is_empty",
+          "Change_type_valid: terminology (Terminology_id_openehr).has_code_for_group_id (Group_id_audit_change_type, change_type.defining_code)"
+        ]
+      },
+      "attestation": {
+        "name": "ATTESTATION",
+        "parent_class": "AUDIT_DETAILS",
+        "description": "Record an attestation of a party (the committer) to item(s) of record content. An attestation is an explicit signing by one healthcare agent of particular content for various purposes (authorization, witnessing, acknowledgement).",
+        "when_to_use": "Use to document explicit digital attestations (signatures) by healthcare professionals. Common use cases: authorization of controlled substances, witnessing by senior clinician, acknowledgement by intended recipient.",
+        "abstract": false,
+        "attributes": [
+          {
+            "name": "attested_view",
+            "type": "DV_MULTIMEDIA",
+            "multiplicity": "0..1",
+            "description": "Optional visual representation of content attested (e.g., screen image).",
+            "notes": ""
+          },
+          {
+            "name": "proof",
+            "type": "String",
+            "multiplicity": "0..1",
+            "description": "Proof of attestation.",
+            "notes": ""
+          },
+          {
+            "name": "items",
+            "type": "List<DV_EHR_URI>",
+            "multiplicity": "0..1",
+            "description": "Items attested, expressed as fully qualified runtime paths. May include fine-grained items from other systems (not recommended).",
+            "notes": "Otherwise assumed to be for the entire VERSION"
+          },
+          {
+            "name": "reason",
+            "type": "DV_TEXT",
+            "multiplicity": "1..1",
+            "description": "Reason of this attestation. Optionally coded by openEHR Terminology (values: authorization, witness, etc.).",
+            "notes": ""
+          },
+          {
+            "name": "is_pending",
+            "type": "Boolean",
+            "multiplicity": "1..1",
+            "description": "True if this attestation is outstanding; False if completed.",
+            "notes": ""
+          }
+        ],
+        "functions": [],
+        "invariants": [
+          "Items_valid: items /= Void implies not items.is_empty",
+          "Reason_valid: (reason.generating_type.is_equal ('DV_CODED_TEXT') implies terminology (Terminology_id_openehr).has_code_for_group_id (Group_id_attestation_reason, reason.defining_code))"
+        ]
+      }
+    }
+  }
+}
