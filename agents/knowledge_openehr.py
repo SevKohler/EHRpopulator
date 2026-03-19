@@ -10,11 +10,17 @@ import json
 from pathlib import Path
 
 _KNOWLEDGE_DIR = Path(__file__).parent / "openEHRKnowledge"
-_RM_CLASSES_FILE = _KNOWLEDGE_DIR / "rm_classes.json"
+_RM_CLASSES_FILE    = _KNOWLEDGE_DIR / "rm_classes.json"
+_TERMINOLOGY_FILE   = _KNOWLEDGE_DIR / "openehr_terminology.json"
 
 
 def _load_rm() -> dict:
     with open(_RM_CLASSES_FILE, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _load_terminology() -> dict:
+    with open(_TERMINOLOGY_FILE, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -45,6 +51,21 @@ def _render_class(cls: dict) -> str:
     invs = cls.get("invariants", [])
     if invs:
         lines.append(f"  Constraints: {'; '.join(invs[:3])}")
+    return "\n".join(lines)
+
+
+def _render_terminology(term: dict) -> str:
+    lines = [
+        "\n## openEHR TERMINOLOGY CODE SYSTEMS",
+        "(terminology_id = \"openehr\" in all compositions)\n",
+    ]
+    for cs in term.get("code_systems", []):
+        name = cs["name"]
+        desc = cs.get("description", "")
+        concepts = cs.get("concepts", [])
+        codes_str = "  " + ",  ".join(f"{c['code']}={c['display']}" for c in concepts)
+        lines.append(f"{name}  [{desc}]")
+        lines.append(codes_str)
     return "\n".join(lines)
 
 
@@ -132,8 +153,9 @@ FLAT JSON ctx shortcuts (for openEHR flat format only):
 
 
 # Build once at import time
-_rm_data = _load_rm()
-OPENEHR_RM_KNOWLEDGE = _build_knowledge_text(_rm_data)
+_rm_data   = _load_rm()
+_term_data = _load_terminology()
+OPENEHR_RM_KNOWLEDGE = _build_knowledge_text(_rm_data) + "\n" + _render_terminology(_term_data)
 
 
 def get_class_info(class_name: str) -> dict | None:

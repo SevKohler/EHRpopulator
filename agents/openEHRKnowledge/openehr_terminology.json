@@ -1,0 +1,230 @@
+{
+  "metadata": {
+    "source": "openEHR/specifications-TERM",
+    "path": "computable/FHIR/",
+    "version": "3.1.0",
+    "date": "2024-08-22",
+    "note": "All openEHR internal terminology code systems. terminology_id = 'openehr' in compositions."
+  },
+  "code_systems": [
+    {
+      "url": "https://specifications.openehr.org/fhir/codesystem-attestation_reason",
+      "name": "attestation_reason",
+      "description": "Attestation Reason",
+      "concepts": [
+        {"code": "240", "display": "signed"},
+        {"code": "648", "display": "witnessed"}
+      ]
+    },
+    {
+      "url": "https://specifications.openehr.org/fhir/codesystem-audit_change_type",
+      "name": "audit_change_type",
+      "description": "Audit Change Type",
+      "concepts": [
+        {"code": "249", "display": "creation"},
+        {"code": "250", "display": "amendment"},
+        {"code": "251", "display": "modification"},
+        {"code": "252", "display": "synthesis"},
+        {"code": "523", "display": "deleted"},
+        {"code": "666", "display": "attestation"},
+        {"code": "816", "display": "restoration"},
+        {"code": "817", "display": "format conversion"},
+        {"code": "253", "display": "unknown"}
+      ]
+    },
+    {
+      "url": "https://specifications.openehr.org/fhir/codesystem-composition_category",
+      "name": "composition_category",
+      "description": "Composition Category",
+      "concepts": [
+        {"code": "431", "display": "persistent"},
+        {"code": "451", "display": "episodic"},
+        {"code": "433", "display": "event"},
+        {"code": "815", "display": "report"}
+      ]
+    },
+    {
+      "url": "https://specifications.openehr.org/fhir/codesystem-compression_algorithms",
+      "name": "compression_algorithms",
+      "description": "Compression Algorithms",
+      "concepts": [
+        {"code": "compress", "display": "compress"},
+        {"code": "deflate", "display": "deflate"},
+        {"code": "gzip", "display": "gzip"},
+        {"code": "zlib", "display": "zlib"},
+        {"code": "other", "display": "other"}
+      ]
+    },
+    {
+      "url": "https://specifications.openehr.org/fhir/codesystem-event_math_function",
+      "name": "event_math_function",
+      "description": "Event Math Function — used in INTERVAL_EVENT.math_function",
+      "concepts": [
+        {"code": "145", "display": "minimum"},
+        {"code": "144", "display": "maximum"},
+        {"code": "267", "display": "mode"},
+        {"code": "268", "display": "median"},
+        {"code": "146", "display": "mean"},
+        {"code": "147", "display": "change"},
+        {"code": "148", "display": "total"},
+        {"code": "149", "display": "variation"},
+        {"code": "521", "display": "decrease"},
+        {"code": "522", "display": "increase"},
+        {"code": "640", "display": "actual"}
+      ]
+    },
+    {
+      "url": "https://specifications.openehr.org/fhir/codesystem-instruction_states",
+      "name": "instruction_states",
+      "description": "Instruction States — used in ISM_TRANSITION.current_state",
+      "concepts": [
+        {"code": "524", "display": "initial"},
+        {"code": "526", "display": "planned"},
+        {"code": "527", "display": "postponed"},
+        {"code": "528", "display": "cancelled"},
+        {"code": "529", "display": "scheduled"},
+        {"code": "245", "display": "active"},
+        {"code": "530", "display": "suspended"},
+        {"code": "531", "display": "aborted"},
+        {"code": "532", "display": "completed"},
+        {"code": "533", "display": "expired"}
+      ]
+    },
+    {
+      "url": "https://specifications.openehr.org/fhir/codesystem-instruction_transitions",
+      "name": "instruction_transitions",
+      "description": "Instruction Transitions — used in ISM_TRANSITION.transition",
+      "concepts": [
+        {"code": "535", "display": "initiate"},
+        {"code": "536", "display": "plan step"},
+        {"code": "537", "display": "postpone"},
+        {"code": "538", "display": "restore"},
+        {"code": "166", "display": "cancel"},
+        {"code": "542", "display": "postponed step"},
+        {"code": "539", "display": "schedule"},
+        {"code": "534", "display": "scheduled step"},
+        {"code": "540", "display": "start"},
+        {"code": "541", "display": "do"},
+        {"code": "543", "display": "active step"},
+        {"code": "544", "display": "suspend"},
+        {"code": "545", "display": "suspended step"},
+        {"code": "546", "display": "resume"},
+        {"code": "547", "display": "abort"},
+        {"code": "548", "display": "finish"},
+        {"code": "549", "display": "time out"},
+        {"code": "550", "display": "notify aborted"},
+        {"code": "551", "display": "notify completed"},
+        {"code": "552", "display": "notify cancelled"}
+      ]
+    },
+    {
+      "url": "https://specifications.openehr.org/fhir/codesystem-normal_statuses",
+      "name": "normal_statuses",
+      "description": "Normal Statuses — used in DV_QUANTITY.normal_status",
+      "concepts": [
+        {"code": "HHH", "display": "HHH"},
+        {"code": "HH",  "display": "HH"},
+        {"code": "H",   "display": "H"},
+        {"code": "N",   "display": "N"},
+        {"code": "L",   "display": "L"},
+        {"code": "LL",  "display": "LL"},
+        {"code": "LLL", "display": "LLL"}
+      ]
+    },
+    {
+      "url": "https://specifications.openehr.org/fhir/codesystem-null_flavours",
+      "name": "null_flavours",
+      "description": "Null Flavours — used when a value is absent",
+      "concepts": [
+        {"code": "271", "display": "no information"},
+        {"code": "253", "display": "unknown"},
+        {"code": "272", "display": "masked"},
+        {"code": "273", "display": "not applicable"}
+      ]
+    },
+    {
+      "url": "https://specifications.openehr.org/fhir/codesystem-participation_function",
+      "name": "participation_function",
+      "description": "Participation Function",
+      "concepts": [
+        {"code": "253", "display": "unknown"}
+      ]
+    },
+    {
+      "url": "https://specifications.openehr.org/fhir/codesystem-participation_mode",
+      "name": "participation_mode",
+      "description": "Participation Mode — how the party participated",
+      "concepts": [
+        {"code": "193", "display": "not specified"},
+        {"code": "216", "display": "face-to-face communication"},
+        {"code": "223", "display": "interpreted face-to-face communication"},
+        {"code": "217", "display": "signing (face-to-face)"},
+        {"code": "195", "display": "live audiovisual; videoconference; videophone"},
+        {"code": "198", "display": "videoconferencing"},
+        {"code": "197", "display": "videophone"},
+        {"code": "202", "display": "telephone"},
+        {"code": "203", "display": "teleconference"},
+        {"code": "207", "display": "email"},
+        {"code": "219", "display": "physically present"},
+        {"code": "220", "display": "physically remote"}
+      ]
+    },
+    {
+      "url": "https://specifications.openehr.org/fhir/codesystem-setting",
+      "name": "setting",
+      "description": "Setting — used in EVENT_CONTEXT.setting",
+      "concepts": [
+        {"code": "225", "display": "home"},
+        {"code": "227", "display": "emergency care"},
+        {"code": "228", "display": "primary medical care"},
+        {"code": "229", "display": "primary nursing care"},
+        {"code": "230", "display": "primary allied health care"},
+        {"code": "231", "display": "midwifery care"},
+        {"code": "232", "display": "secondary medical care"},
+        {"code": "233", "display": "secondary nursing care"},
+        {"code": "234", "display": "secondary allied health care"},
+        {"code": "235", "display": "complementary health care"},
+        {"code": "236", "display": "dental care"},
+        {"code": "237", "display": "nursing home care"},
+        {"code": "802", "display": "mental healthcare"},
+        {"code": "238", "display": "other care"}
+      ]
+    },
+    {
+      "url": "https://specifications.openehr.org/fhir/codesystem-subject_relationship",
+      "name": "subject_relationship",
+      "description": "Subject Relationship — used in PARTY_RELATED.relationship",
+      "concepts": [
+        {"code": "0",   "display": "self"},
+        {"code": "3",   "display": "foetus"},
+        {"code": "10",  "display": "mother"},
+        {"code": "9",   "display": "father"},
+        {"code": "6",   "display": "donor"},
+        {"code": "253", "display": "unknown"},
+        {"code": "22",  "display": "partner/spouse"},
+        {"code": "23",  "display": "brother"},
+        {"code": "24",  "display": "sister"},
+        {"code": "27",  "display": "sibling"},
+        {"code": "28",  "display": "child"},
+        {"code": "29",  "display": "daughter"},
+        {"code": "31",  "display": "son"},
+        {"code": "254", "display": "parent"},
+        {"code": "255", "display": "biological mother"},
+        {"code": "256", "display": "biological father"},
+        {"code": "189", "display": "neonate"}
+      ]
+    },
+    {
+      "url": "https://specifications.openehr.org/fhir/codesystem-version_lifecycle_state",
+      "name": "version_lifecycle_state",
+      "description": "Version Lifecycle State",
+      "concepts": [
+        {"code": "532", "display": "complete"},
+        {"code": "553", "display": "incomplete"},
+        {"code": "523", "display": "deleted"},
+        {"code": "800", "display": "inactive"},
+        {"code": "801", "display": "abandoned"}
+      ]
+    }
+  ]
+}
