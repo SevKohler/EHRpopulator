@@ -20,6 +20,7 @@ from models import (
 )
 from template_parser import parse_web_template, parse_structure_definition
 from tools import TerminologyTools, EHRbaseTools
+from knowledge_openehr import OPENEHR_RM_KNOWLEDGE
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +76,7 @@ Do not include any text outside the JSON.
 """.strip()
 
 
-RESOURCE_COMPOSER_SYSTEM = """
+RESOURCE_COMPOSER_SYSTEM = f"""
 You are an expert in serializing pre-mapped clinical data into valid openEHR compositions
 and FHIR R4 resources. You have access to terminology tools to validate and expand coded values.
 
@@ -86,47 +87,7 @@ Your job is to:
 3. Add required structural metadata
 4. Return ONLY the final JSON — no markdown fences, no explanation
 
-═══════════════════════════════════════════════════════════
-openEHR REFERENCE MODEL (RM) — FIELD SEMANTICS
-═══════════════════════════════════════════════════════════
-Every openEHR composition has RM-level metadata fields. Know what they mean:
-
-COMPOSITION-LEVEL:
-  composer/name              The clinician who authored this composition (e.g. "Dr. Anna Müller")
-                             NOT the patient. Use the treating physician from the narrative.
-  language/code_string       ISO 639-1 language code: "en", "de", "fr" — matches the data language
-  language/terminology_id    Always "ISO_639-1"
-  territory/code_string      ISO 3166-1 alpha-2 country: "DE", "US", "GB", "AT", "CH" etc.
-  territory/terminology_id   Always "ISO_3166-1"
-  category                   openehr::433|event|   → for encounters, observations, measurements
-                             openehr::431|persistent| → for ongoing records (problem list, medication list)
-                             openehr::432|episodic|  → for episodic records (discharge summaries)
-
-EVENT CONTEXT (present when category = event):
-  context/start_time         ISO 8601 datetime when the clinical encounter/event STARTED
-                             (e.g. when the patient arrived, when the measurement was taken)
-  context/end_time           ISO 8601 datetime when the encounter ENDED (optional)
-  context/setting            openehr::225|home|  238|other care|  227|primary medical care|
-                             229|secondary medical care|  230|secondary nursing care|
-  context/health_care_facility/name   Name of the hospital/clinic where this occurred
-
-SUBJECT (who the data is about — usually the patient):
-  subject/_type              "PARTY_SELF" (the EHR owner, i.e. the patient)
-
-TIME FIELDS:
-  Any path ending in /time or /date_time   → ISO 8601 (e.g. "2024-03-15T09:30:00+02:00")
-  Use times consistent with context/start_time and the patient narrative.
-  Do NOT use future dates relative to the encounter.
-
-FLAT JSON ctx shortcuts (openEHR flat format only):
-  ctx/template_id            The template ID string
-  ctx/language               "en" (or appropriate ISO 639-1 code)
-  ctx/territory              "US" (or appropriate ISO 3166-1 code)
-  ctx/time                   Composition creation time (ISO 8601)
-  ctx/composer_name          The authoring clinician's name
-  ctx/health_care_facility_name   Facility name
-  ctx/id_scheme              "local"
-  ctx/id_namespace           "local"
+{OPENEHR_RM_KNOWLEDGE}
 
 ═══════════════════════════════════════════════════════════
 FORMAT RULES
@@ -148,7 +109,7 @@ For openEHR CANONICAL JSON:
 
 For FHIR R4 JSON:
 - Map field_values FHIRPaths to the correct resource structure
-- Use full coding objects: {"system": "...", "code": "...", "display": "..."}
+- Use full coding objects: {{"system": "...", "code": "...", "display": "..."}}
 - Look up codes via terminology tools before using them
 - Include required fields: resourceType, status, subject, etc.
 
