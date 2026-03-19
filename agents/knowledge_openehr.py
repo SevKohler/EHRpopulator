@@ -63,9 +63,14 @@ def _render_terminology(term: dict) -> str:
         name = cs["name"]
         desc = cs.get("description", "")
         concepts = cs.get("concepts", [])
-        codes_str = "  " + ",  ".join(f"{c['code']}={c['display']}" for c in concepts)
         lines.append(f"{name}  [{desc}]")
-        lines.append(codes_str)
+        has_definitions = any(c.get("definition") for c in concepts)
+        if has_definitions:
+            for c in concepts:
+                defn = f" — {c['definition']}" if c.get("definition") else ""
+                lines.append(f"  {c['code']}={c['display']}{defn}")
+        else:
+            lines.append("  " + ",  ".join(f"{c['code']}={c['display']}" for c in concepts))
     return "\n".join(lines)
 
 
@@ -97,21 +102,11 @@ def _build_knowledge_text(rm: dict) -> str:
         if cls:
             sections.append(_render_class(cls))
 
-    # --- ISM states (practical cheat-sheet, not in the JSON) ---
     sections.append("""
 ─────────────────────────────────────────────────
-ISM_TRANSITION current_state values (openEHR terminology):
-  524 = initial      — order created, not yet active
-  529 = scheduled    — planned for a specific time
-  527 = postponed    — delayed
-  528 = cancelled    — will not happen
-  245 = active       — currently in progress
-  530 = suspended    — temporarily on hold
-  531 = aborted      — stopped before completion
-  532 = completed    — done  ← most common for administered meds / procedures
-
-  careflow_step terminology = "local"  (at-code from the archetype, e.g. "at0016")
-  current_state terminology = "openehr"
+ISM NOTE: careflow_step terminology = "local"  (at-code from the archetype, e.g. "at0016")
+          current_state terminology = "openehr"
+          Most common state for administered medication / completed procedure: 532=completed
 """)
 
     # --- Party types ---
@@ -122,22 +117,8 @@ ISM_TRANSITION current_state values (openEHR terminology):
         if cls:
             sections.append(_render_class(cls))
 
-    # --- Composition category values ---
     sections.append("""
 ─────────────────────────────────────────────────
-COMPOSITION category values (openEHR terminology):
-  431 = persistent  — potential lifetime validity (problem list, allergy list)
-  433 = event       — valid at time of recording (encounters, observations)
-  451 = episodic    — valid over a care episode (discharge summary)
-
-EVENT_CONTEXT.setting values (openEHR terminology):
-  225 = home
-  227 = primary medical care
-  229 = secondary medical care
-  230 = secondary nursing care
-  233 = emergency care
-  238 = other care
-
 FLAT JSON ctx shortcuts (for openEHR flat format only):
   ctx/template_id              template ID string
   ctx/language                 ISO 639-1 (e.g. "en", "de")

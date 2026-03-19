@@ -76,18 +76,18 @@
     {
       "url": "https://specifications.openehr.org/fhir/codesystem-instruction_states",
       "name": "instruction_states",
-      "description": "Instruction States — used in ISM_TRANSITION.current_state",
+      "description": "Instruction States — used in ISM_TRANSITION.current_state. This state machine is the result of long-term experience with clinical workflows and act management systems.",
       "concepts": [
-        {"code": "524", "display": "initial"},
-        {"code": "526", "display": "planned"},
-        {"code": "527", "display": "postponed"},
-        {"code": "528", "display": "cancelled"},
-        {"code": "529", "display": "scheduled"},
-        {"code": "245", "display": "active"},
-        {"code": "530", "display": "suspended"},
-        {"code": "531", "display": "aborted"},
-        {"code": "532", "display": "completed"},
-        {"code": "533", "display": "expired"}
+        {"code": "524", "display": "initial",    "definition": "Initial state, prior to planning activity. Default starting state for computable representation of the state machine."},
+        {"code": "526", "display": "planned",    "definition": "The action has been described but has not yet been performed."},
+        {"code": "527", "display": "postponed",  "definition": "The action has not been performed and will not be without specific conditions being met. Events that would normally activate the instruction are ignored until a restore event occurs."},
+        {"code": "528", "display": "cancelled",  "definition": "The action was defined but was cancelled before being performed."},
+        {"code": "529", "display": "scheduled",  "definition": "The action will be performed at some designated future time and has been booked in a scheduling system."},
+        {"code": "245", "display": "active",     "definition": "The action is being performed according to its definition. The entire course of a medication or therapy corresponds to this state."},
+        {"code": "530", "display": "suspended",  "definition": "The action was begun but has been stopped temporarily and will not be restarted until explicitly resumed."},
+        {"code": "531", "display": "aborted",    "definition": "The action began but was permanently terminated before normal completion."},
+        {"code": "532", "display": "completed",  "definition": "The action began and was completed normally."},
+        {"code": "533", "display": "expired",    "definition": "The time during which the action could have been relevant has expired; the action may have completed, been cancelled, or never occurred."}
       ]
     },
     {
