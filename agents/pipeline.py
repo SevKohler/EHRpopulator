@@ -21,9 +21,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import requests
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
 
 from models import (
     ResourceFormat, TemplateType, TemplateAnalysis,
@@ -74,6 +77,7 @@ class Pipeline:
         self.validator_url = validator_cfg.get("base_url", "http://localhost:8181")
         self.max_retries = config.get("pipeline", {}).get("max_retries", 5)
         self.output_dir = Path(config.get("pipeline", {}).get("output_dir", "../output"))
+        self.workers = config.get("pipeline", {}).get("workers", 4)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.template_analyzer = TemplateAnalyzerAgent(llm)
@@ -140,6 +144,7 @@ class Pipeline:
 
         results: list[GeneratedResource] = []
         total = count * len(analyses)
+        lock = threading.Lock()
 
         # Wipe and recreate journey debug folder (keep max 10 samples)
         journey_dir = self.output_dir / "journeys"
@@ -149,42 +154,45 @@ class Pipeline:
         journey_dir.mkdir(parents=True)
         JOURNEY_SAMPLE_LIMIT = 10
 
-        with Progress(SpinnerColumn(), TextColumn("{task.description}"),
-                      console=console) as progress:
-            task = progress.add_task(f"Generating {count} patient(s) × {len(analyses)} template(s)...",
-                                     total=total)
-
-            for i in range(count):
-                progress.update(task, description=f"Patient {i+1}/{count}: generating journey...")
-
-                # Step 2: Generate one patient journey covering ALL templates
-                journey = self.journey_generator.generate(
-                    analyses=analyses,
-                    scenario=scenario,
-                    patient_index=i,
-                )
-
-                # Save journey for inspection (up to JOURNEY_SAMPLE_LIMIT)
+        def process_patient(i: int) -> list[GeneratedResource]:
+            journey = self.journey_generator.generate(
+                analyses=analyses,
+                scenario=scenario,
+                patient_index=i,
+            )
+            with lock:
                 if i < JOURNEY_SAMPLE_LIMIT:
                     (journey_dir / f"journey_{i+1}_{journey.patient_id}.json").write_text(
                         journey.model_dump_json(indent=2), encoding="utf-8"
                     )
 
-                # Step 3+4: Compose + validate for each template
-                for analysis, opt_xml, struct_def in template_infos:
-
-                    progress.update(task,
-                        description=f"Patient {i+1}/{count}: composing {analysis.name} ({format.value})...")
-                    resource = self._compose_with_validation(
-                        journey, analysis, format, opt_xml, struct_def)
-
-                    results.append(resource)
+            patient_resources = []
+            for analysis, opt_xml, struct_def in template_infos:
+                resource = self._compose_with_validation(journey, analysis, format, opt_xml, struct_def)
+                with lock:
                     self._save(resource, i)
+                if upload:
+                    self._upload(resource)
+                patient_resources.append(resource)
+            return patient_resources
 
-                    if upload:
-                        progress.update(task, description=f"Patient {i+1}/{count}: uploading...")
-                        self._upload(resource)
+        with Progress(SpinnerColumn(), TextColumn("{task.description}"),
+                      BarColumn(), MofNCompleteColumn(),
+                      console=console) as progress:
+            task = progress.add_task(
+                f"Generating {count} patient(s) × {len(analyses)} template(s)...",
+                total=count)
 
+            with ThreadPoolExecutor(max_workers=self.workers) as executor:
+                futures = {executor.submit(process_patient, i): i for i in range(count)}
+                for future in as_completed(futures):
+                    i = futures[future]
+                    try:
+                        patient_resources = future.result()
+                        with lock:
+                            results.extend(patient_resources)
+                    except Exception as e:
+                        console.print(f"  [red]Patient {i+1} failed:[/red] {e}")
                     progress.advance(task)
 
         valid_count = sum(1 for r in results if r.valid)
@@ -379,7 +387,11 @@ class Pipeline:
         filename = (f"{resource.format.value.lower()}_{resource.patient_id}"
                     f"_attempt{resource.generation_attempt}_{index}.{suffix}")
         out_path = self.output_dir / filename
-        out_path.write_text(resource.content, encoding="utf-8")
+        try:
+            pretty = json.dumps(json.loads(resource.content), indent=2, ensure_ascii=False)
+        except (json.JSONDecodeError, ValueError):
+            pretty = resource.content
+        out_path.write_text(pretty, encoding="utf-8")
 
         # Save metadata alongside
         meta_path = self.output_dir / (filename.replace(".json", ".meta.json"))

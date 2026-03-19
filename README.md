@@ -2,14 +2,15 @@
 
 Generate synthetic test data for **openEHR** and **FHIR** from your own templates using AI agents.
 
-Describe the patients you want, provide OPT or StructureDefinition files → get back validated compositions and resources, ready to upload.
+Describe the patients you want, drop your templates in a folder → get back validated compositions and resources, ready to upload.
 
 ---
 
 ## How it works
 
 ```
-OPT(s) / StructureDefinition(s)
+templates/openehr/   ← your OPT files
+templates/fhir/      ← your StructureDefinition files
         ↓  (OPTs converted to web template via EHRbase SDK)
   Template structure  ←  paths, types, descriptions, annotations, value sets
         ↓
@@ -22,114 +23,66 @@ OPT(s) / StructureDefinition(s)
   Upload (optional)  →  EHRbase / FHIR server
 ```
 
-One journey covers **all provided OPTs** — a cancer patient journey spans diagnosis, labs, vitals, medication OPTs simultaneously.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Python Agent Pipeline                        │
-│                                                                  │
-│  ┌──────────────────────┐                                        │
-│  │  TemplateAnalyzer    │  OPT → web template (EHRbase SDK)     │
-│  │                      │  StructureDefinition → parsed directly │
-│  │                      │  paths, types, descriptions, annotations│
-│  └──────────┬───────────┘                                        │
-│             │ TemplateAnalysis × N templates (no LLM used)      │
-│             ▼                                                     │
-│  ┌──────────────────────┐                                        │
-│  │  JourneyGenerator    │  Scenario → clinical narrative +       │
-│  │                      │  field_values mapped to template paths  │
-│  └──────────┬───────────┘                                        │
-│             │ PatientJourney (shared across all templates)        │
-│             ▼                                                     │
-│  ┌──────────────────────┐   tool calls    ┌──────────────────┐  │
-│  │  ResourceComposer    │◄───────────────►│    Snowstorm     │  │
-│  │  (once per template) │                 │  ValueSet expand │  │
-│  │  openEHR / FHIR JSON │                 │  SNOMED ECL      │  │
-│  └──────────┬───────────┘                 │  LOINC search    │  │
-│             │ raw JSON                    └──────────────────┘  │
-│             ▼                                                     │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                    Validation Loop                        │   │
-│  │   POST /validate ──► Java Validator ──► errors?          │   │
-│  │         ▲                                    │            │   │
-│  │         └──── feed errors back to composer ◄─┘            │   │
-│  │                     (up to max_retries)                   │   │
-│  └──────────┬─────────────────────────────────────────────── ┘  │
-│             ▼                                                     │
-│       Upload (optional) → EHRbase / FHIR server                 │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│              Java Validator Service  :8181                       │
-│                                                                  │
-│  POST /validate                                                  │
-│  ┌──────────────┐    ┌─────────────────────────────────────┐   │
-│  │  FHIR_R4     │───►│  HAPI FHIR 7.x                      │   │
-│  │              │    │  base spec + inline StructureDefinition│  │
-│  │              │    │  code validation via Snowstorm        │   │
-│  └──────────────┘    └─────────────────────────────────────┘   │
-│  ┌──────────────┐    ┌─────────────────────────────────────┐   │
-│  │  OPENEHR_*   │───►│  EHRbase SDK (offline)              │   │
-│  │              │    │  flat JSON → Composition via         │   │
-│  │              │    │  FlatJasonProvider + WebTemplate     │   │
-│  │              │    │  → LocatableValidator                │   │
-│  └──────────────┘    └─────────────────────────────────────┘   │
-│                                                                  │
-│  POST /webtemplate                                               │
-│  ┌──────────────┐    ┌─────────────────────────────────────┐   │
-│  │  OPT XML     │───►│  EHRbase SDK OPTParser              │   │
-│  │              │    │  → web template JSON                 │   │
-│  └──────────────┘    └─────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-```
+One journey covers **all templates in the folder** — a cancer patient journey spans diagnosis, labs, vitals, and medication OPTs simultaneously.
 
 ---
 
 ## Setup
 
-### 1. Add terminology files
-
-Drop your files into the right folder — content is gitignored, never committed.
-
-**`terminology/seeds/`** — loaded once, skipped on restart:
-- `SnomedCT_InternationalRF2_*.zip` — needs [SNOMED license](https://www.snomed.org/snomed-ct/get-snomed)
-- `Loinc_*.json` — FHIR R4 CodeSystem from [loinc.org](https://loinc.org/downloads/)
-- `icd10*.xml` — ICD-10 ClaML XML from WHO/DIMDI (auto-converted to FHIR CodeSystem)
-
-**`terminology/fhir/`** — reloaded on every restart:
-- Your own FHIR `CodeSystem` or `ValueSet` JSON files
-
-### 2. Set your API key
-
-```bash
-# Edit agents/.env and set your key:
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-Get your key at [console.anthropic.com](https://console.anthropic.com/).
-
-### 3. Python setup (one time)
+### 1. Python setup (one time)
 
 ```bash
 make setup
 ```
 
-### 4. Start everything
+### 2. Add terminology files
+
+Drop your files into `terminology/seeds/` — loaded once by the terminology-loader container, never committed.
+
+| File | What |
+|---|---|
+| `SnomedCT_InternationalRF2_*.zip` | SNOMED CT — needs [license](https://www.snomed.org/snomed-ct/get-snomed) |
+| `Loinc_*.zip` | LOINC — download from [loinc.org](https://loinc.org/downloads/) |
+| `icd10*.xml` or `icd10*.zip` | ICD-10 ClaML (international or national, e.g. ICD-10-GM) |
+
+Your own FHIR `CodeSystem` / `ValueSet` JSON files go in `terminology/fhir/` — reloaded on every restart.
+
+### 3. Set your API key
 
 ```bash
-sudo sysctl -w vm.max_map_count=262144   # required for Elasticsearch (once per boot)
-sudo docker compose up -d
+# Edit agents/.env:
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-This starts EHRbase, HAPI FHIR, Snowstorm, the Java validator, and the terminology loader.
+### 4. Add your templates
 
-> **First run takes time** — SNOMED CT import takes 20–60 min, LOINC a few minutes.
-> Watch progress: `sudo docker compose logs -f terminology-loader`
+```
+templates/openehr/   ← .opt or .xml files
+templates/fhir/      ← StructureDefinition .json files
+```
 
-To make the `vm.max_map_count` setting permanent:
+### 5. Start the stack
+
 ```bash
-echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf
+make start
 ```
+
+This starts Snowstorm, the validator, and the terminology loader (which imports your terminology files automatically).
+
+> **First run:** SNOMED CT import takes 20–60 min, LOINC and ICD-10 a few minutes.
+> Watch progress:
+
+```bash
+make logs-terminology
+```
+
+### 6. Check status
+
+```bash
+make status
+```
+
+Shows which services are up and which terminologies are loaded. When everything is green → run the tool.
 
 ---
 
@@ -142,8 +95,8 @@ make run
 ```
 
 You will be asked:
-1. Template file(s) — one or more OPTs or StructureDefinitions
-2. Output format — openEHR flat / canonical / FHIR R4
+1. Standard — openEHR or FHIR R4 (all templates in the folder are used automatically)
+2. Output format — openEHR flat / canonical (FHIR is always FHIR R4)
 3. How many patients
 4. Scenario description — e.g. *"rare metabolic disease patients with Gaucher disease, include diagnostic workup and enzyme replacement therapy"*
 5. Upload to server?
@@ -151,20 +104,20 @@ You will be asked:
 ### Non-interactive
 
 ```bash
-# Single OPT
-make generate ARGS="my_template.opt --scenario 'elderly COPD patients' --format OPENEHR_FLAT --count 5"
+# openEHR, 5 patients
+make generate ARGS="templates/openehr/vital_signs.opt --scenario 'elderly COPD patients' --count 5"
 
-# Multiple OPTs — one journey spans all templates
-make generate ARGS="diagnosis.opt labs.opt vitals.opt --scenario 'cancer patients on chemotherapy' --count 3"
+# Multiple OPTs — one journey spans all
+make generate ARGS="templates/openehr/diagnosis.opt templates/openehr/labs.opt --scenario 'cancer patients' --count 3"
 
 # FHIR
-make generate ARGS="MyProfile.json --format FHIR_R4 --scenario 'diabetic patients with CKD stage 3' --count 5"
+make generate ARGS="templates/fhir/MyProfile.json --format FHIR_R4 --scenario 'diabetic patients' --count 5"
 
-# Upload to servers after generation
-make generate ARGS="my_template.opt --scenario 'post-op ICU patients' --count 5 --upload"
+# Upload after generation
+make generate ARGS="templates/openehr/my_template.opt --scenario 'ICU patients' --count 5 --upload"
 
-# Inspect template structure
-make analyze ARGS="my_template.opt"
+# Inspect a template's structure
+make analyze ARGS="templates/openehr/my_template.opt"
 ```
 
 Output lands in `output/`. Each record gets a `.json` and a `.meta.json` with validation status.
@@ -182,12 +135,42 @@ Sample journeys (up to 10) are saved to `output/journeys/` for inspection — wi
 
 ---
 
-## Reload your FHIR terminology files
+## Make commands
 
-```bash
-sudo docker compose restart terminology-loader
-sudo docker compose logs -f terminology-loader
+| Command | What |
+|---|---|
+| `make setup` | Install Python dependencies (one time) |
+| `make start` | Start full stack (Snowstorm, validator, terminology loader, EHRbase, FHIR server) |
+| `make start-light` | Start without EHRbase and FHIR server (terminology + validation only) |
+| `make stop` | Stop everything |
+| `make status` | Show service health and terminology loading progress |
+| `make logs-terminology` | Watch terminology import progress |
+| `make reload-terminology` | Reload files from `terminology/fhir/` |
+| `make run` | Interactive generation |
+| `make generate ARGS="..."` | Non-interactive generation |
+| `make analyze ARGS="..."` | Inspect a template's structure |
+
+---
+
+## Using existing servers
+
+If you already have Snowstorm, EHRbase, or a FHIR server running, you don't need docker compose for those. Edit `agents/config.yaml`:
+
+```yaml
+terminology:
+  base_url: "https://your-snowstorm.example.com/fhir"
+
+ehrbase:
+  enabled: true
+  base_url: "https://your-ehrbase.example.com/ehrbase"
+  username: "your-user"
+
+fhir_server:
+  enabled: true
+  base_url: "https://your-fhir.example.com/fhir"
 ```
+
+The validator is always required (it's part of this repo) — start it with `make start-light` or `sudo docker compose up -d validator`.
 
 ---
 

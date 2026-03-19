@@ -74,6 +74,56 @@ def _resolve_env(obj):
 # Commands
 # ---------------------------------------------------------------------------
 
+def _check_terminology(config: dict) -> None:
+    """Warn if terminology server is missing expected code systems."""
+    import requests as _requests
+    base = config.get("terminology", {}).get("base_url", "http://localhost:8085/fhir")
+    checks = [
+        ("SNOMED CT", "http://snomed.info/sct"),
+        ("LOINC",     "http://loinc.org"),
+        ("ICD-10",    "http://hl7.org/fhir/sid/icd-10"),
+    ]
+    missing = []
+    try:
+        for label, url in checks:
+            r = _requests.get(f"{base}/CodeSystem", params={"url": url}, timeout=5)
+            if r.json().get("total", 0) == 0:
+                missing.append(label)
+    except Exception:
+        console.print("  [yellow]Warning:[/yellow] Cannot reach terminology server — code lookups will be skipped.")
+        return
+
+    if missing:
+        console.print(f"\n  [yellow]Warning:[/yellow] These code systems are not yet loaded in Snowstorm: "
+                      f"[bold]{', '.join(missing)}[/bold]")
+        console.print("  Terminology lookups will be skipped for those systems.")
+        console.print("  Watch progress: [dim]sudo docker compose logs -f terminology-loader[/dim]")
+        if not typer.confirm("\n  Continue anyway?", default=True):
+            raise typer.Exit(0)
+    else:
+        console.print("  [green]✓[/green] Terminology ready (SNOMED, LOINC, ICD-10)")
+
+
+TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
+OPENEHR_DIR = TEMPLATES_DIR / "openehr"
+FHIR_DIR = TEMPLATES_DIR / "fhir"
+
+
+def _discover_templates(standard: str) -> list[Path]:
+    """Find all template files for the given standard."""
+    if standard == "openehr":
+        folder = OPENEHR_DIR
+        patterns = ["*.opt", "*.xml"]
+    else:
+        folder = FHIR_DIR
+        patterns = ["*.json"]
+
+    files: list[Path] = []
+    for pattern in patterns:
+        files.extend(sorted(folder.glob(pattern)))
+    return files
+
+
 @app.command()
 def run(
     config_path: Annotated[Optional[Path], typer.Option("--config", "-c")] = None,
@@ -86,39 +136,34 @@ def run(
     """
     console.print("\n[bold cyan]EHR Populator[/bold cyan] — Interactive Generator\n")
 
-    # 1. Collect template files
-    console.print("Enter the path(s) to your OPT or FHIR StructureDefinition file(s).")
-    console.print("  [dim]Tip: you can enter multiple files, one per line. Press Enter twice when done.[/dim]")
-    template_paths: list[Path] = []
-    while True:
-        raw = typer.prompt("  Template file", default="").strip()
-        if not raw:
-            if template_paths:
-                break
-            console.print("  [red]Please enter at least one template file.[/red]")
-            continue
-        p = Path(raw)
-        if not p.exists():
-            console.print(f"  [red]File not found:[/red] {p}")
-            continue
-        template_paths.append(p)
-        console.print(f"  [green]Added:[/green] {p.name}  (press Enter again to continue, or add another)")
+    # 1. Standard
+    console.print("Which standard?")
+    console.print("  [bold]1[/bold]  openEHR  (OPT files from templates/openehr/)")
+    console.print("  [bold]2[/bold]  FHIR R4  (StructureDefinitions from templates/fhir/)")
+    std_choice = typer.prompt("  Choice", default="1").strip()
+    is_fhir = std_choice in ("2", "fhir", "FHIR", "FHIR_R4")
 
-    # 2. Format
-    console.print("\nOutput format:")
-    console.print("  [bold]1[/bold]  OPENEHR_FLAT       (flat JSON for EHRbase)")
-    console.print("  [bold]2[/bold]  OPENEHR_CANONICAL  (canonical openEHR JSON)")
-    console.print("  [bold]3[/bold]  FHIR_R4            (FHIR R4 JSON)")
-    fmt_choice = typer.prompt("  Choice", default="1").strip()
-    fmt_map = {
-        "1": ResourceFormat.OPENEHR_FLAT,
-        "2": ResourceFormat.OPENEHR_CANONICAL,
-        "3": ResourceFormat.FHIR_R4,
-        "OPENEHR_FLAT": ResourceFormat.OPENEHR_FLAT,
-        "OPENEHR_CANONICAL": ResourceFormat.OPENEHR_CANONICAL,
-        "FHIR_R4": ResourceFormat.FHIR_R4,
-    }
-    format = fmt_map.get(fmt_choice, ResourceFormat.OPENEHR_FLAT)
+    template_dir = FHIR_DIR if is_fhir else OPENEHR_DIR
+    template_paths = _discover_templates("fhir" if is_fhir else "openehr")
+
+    if not template_paths:
+        console.print(f"\n[red]No templates found in {template_dir}[/red]")
+        console.print(f"  Drop your {'StructureDefinition .json' if is_fhir else 'OPT .opt/.xml'} files into: [cyan]{template_dir}[/cyan]")
+        raise typer.Exit(1)
+
+    console.print(f"\nFound [green]{len(template_paths)}[/green] template(s) in [cyan]{template_dir.relative_to(TEMPLATES_DIR.parent)}[/cyan]:")
+    for p in template_paths:
+        console.print(f"  - {p.name}")
+
+    # 2. Format (openEHR only — FHIR is always FHIR_R4)
+    if is_fhir:
+        format = ResourceFormat.FHIR_R4
+    else:
+        console.print("\nOutput format:")
+        console.print("  [bold]1[/bold]  OPENEHR_FLAT       (flat JSON for EHRbase)")
+        console.print("  [bold]2[/bold]  OPENEHR_CANONICAL  (canonical openEHR JSON)")
+        fmt_choice = typer.prompt("  Choice", default="1").strip()
+        format = ResourceFormat.OPENEHR_CANONICAL if fmt_choice == "2" else ResourceFormat.OPENEHR_FLAT
 
     # 3. Count
     count = typer.prompt("\nHow many patients to generate", default="1")
@@ -143,6 +188,8 @@ def run(
     config = load_config(config_path)
     if output_dir:
         config.setdefault("pipeline", {})["output_dir"] = str(output_dir)
+
+    _check_terminology(config)
 
     pipeline = Pipeline(config)
     results = pipeline.run(

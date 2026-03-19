@@ -75,6 +75,11 @@
             <groupId>ca.uhn.hapi.fhir</groupId>
             <artifactId>hapi-fhir-validation-resources-r4</artifactId>
         </dependency>
+        <dependency>
+            <groupId>ca.uhn.hapi.fhir</groupId>
+            <artifactId>hapi-fhir-caching-caffeine</artifactId>
+            <version>${hapi.fhir.version}</version>
+        </dependency>
         <!-- EHRbase openEHR SDK -->
         <!-- Verify artifact names at: https://github.com/ehrbase/openEHR_SDK -->
         <dependency>

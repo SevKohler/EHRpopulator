@@ -28,6 +28,12 @@ output/
 *.ndjson
 *.parquet
 
+# Template files — drop your OPTs and StructureDefinitions here, never commit
+templates/openehr/*
+!templates/openehr/.gitkeep
+templates/fhir/*
+!templates/fhir/.gitkeep
+
 # Terminology files (large binaries — load locally, never commit)
 terminology/seeds/*
 !terminology/seeds/README.md

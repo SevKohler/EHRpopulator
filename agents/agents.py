@@ -51,7 +51,7 @@ Output valid JSON with exactly this structure:
   "patient_id": "PAT-001",
   "age": 54,
   "gender": "female",
-  "narrative": "Brief clinical summary for context.",
+  "narrative": "A detailed clinical narrative (3-5 paragraphs) telling the patient's story chronologically: presenting complaint, history, clinical course, relevant findings, treatments, and outcome. Write as a physician would document it — specific, clinically realistic, and consistent with the field_values below.",
   "field_values": {
     "path/to/field|magnitude": 38.5,
     "path/to/field|unit": "Cel",

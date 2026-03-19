@@ -1,24 +1,19 @@
-.PHONY: setup run generate analyze shell
+.PHONY: setup popu generate analyze 
 
-# Install Python dependencies into agents/.venv
+# One-time setup: install Python deps and watch terminology loading progress
 setup:
 	cd agents && python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt
-	@echo "Done. Run: make run"
+	cd agents && .venv/bin/python setup.py
 
-# Interactive mode — asks scenario, count, format interactively
-run:
+# Start interactive generation
+popu:
 	cd agents && .venv/bin/python main.py run $(ARGS)
 
-# Non-interactive generate — pass all args via ARGS=
-# Example: make generate ARGS="vitals.opt labs.opt --scenario 'diabetic patients' --count 5"
+# Non-interactive generation
+# Example: make generate ARGS="templates/openehr/vitals.opt --scenario 'COPD patients' --count 5"
 generate:
 	cd agents && .venv/bin/python main.py generate $(ARGS)
 
-# Analyze a template structure
-# Example: make analyze ARGS="templates/vital_signs.opt"
+# Inspect a template's structure
 analyze:
 	cd agents && .venv/bin/python main.py analyze $(ARGS)
-
-# Drop into a shell with the venv active
-shell:
-	cd agents && bash --init-file <(echo "source .venv/bin/activate")

@@ -19,6 +19,7 @@ Supported file types:
 
 import json
 import os
+import subprocess
 import sys
 import time
 import requests
@@ -99,13 +100,24 @@ def load_snomed(zip_path: str, loaded: set):
     print(f"  [seeds] Importing SNOMED CT from {name} — this takes 20-60 min...", flush=True)
 
     r = requests.post(f"{SNOWSTORM_URL}/imports",
-                      json={"branchPath": "MAIN", "createCodeSystemVersion": True},
+                      json={"type": "SNAPSHOT", "branchPath": "MAIN", "createCodeSystemVersion": True},
                       timeout=30)
     if r.status_code not in (200, 201):
         print(f"  ERROR creating import job: {r.status_code} {r.text[:200]}", flush=True)
         return
 
-    import_id = r.json()["id"]
+    # Snowstorm returns the import ID in the Location header (e.g. /imports/{id})
+    location = r.headers.get("Location", "")
+    import_id = location.rstrip("/").split("/")[-1] if location else None
+    if not import_id:
+        # Fall back to response body
+        try:
+            import_id = r.json().get("id")
+        except Exception:
+            pass
+    if not import_id:
+        print(f"  ERROR: could not get import ID. Location: {location}, body: {r.text[:200]}", flush=True)
+        return
     print(f"  Import job ID: {import_id}", flush=True)
 
     with open(zip_path, "rb") as f:
@@ -118,8 +130,8 @@ def load_snomed(zip_path: str, loaded: set):
 
     while True:
         time.sleep(30)
-        status = requests.get(f"{SNOWSTORM_URL}/imports/{import_id}",
-                              timeout=10).json().get("status", "UNKNOWN")
+        data = requests.get(f"{SNOWSTORM_URL}/imports/{import_id}", timeout=10).json()
+        status = data.get("status", "UNKNOWN")
         print(f"  Status: {status}", flush=True)
         if status == "COMPLETED":
             print(f"  SNOMED CT loaded.\n", flush=True)
@@ -127,7 +139,7 @@ def load_snomed(zip_path: str, loaded: set):
             save_state(loaded)
             return
         elif status in ("FAILED", "CANCELLED"):
-            print(f"  SNOMED import failed.\n", flush=True)
+            print(f"  SNOMED import failed. Details: {json.dumps(data)}\n", flush=True)
             return
 
 
@@ -239,6 +251,52 @@ def load_claml(xml_path: str, loaded: set):
         print(f"  ERROR {r.status_code}: {r.text[:300]}", flush=True)
 
 
+def _hapi_cli_upload(zip_path: str, system_url: str, label: str, loaded: set):
+    """Upload a terminology zip to Snowstorm using hapi-fhir-cli."""
+    name = os.path.basename(zip_path)
+    if name in loaded:
+        print(f"  [seeds] SKIP {name} (already loaded)", flush=True)
+        return
+    if code_system_exists(system_url):
+        print(f"  [seeds] SKIP {name} ({label} already in Snowstorm)", flush=True)
+        loaded.add(name)
+        save_state(loaded)
+        return
+
+    print(f"  [seeds] Uploading {label} via hapi-fhir-cli — this may take a few minutes...", flush=True)
+    cmd = [
+        "hapi-fhir-cli", "upload-terminology",
+        "-d", zip_path,
+        "-v", "r4",
+        "-t", FHIR_BASE,
+        "-u", system_url,
+    ]
+    result = subprocess.run(cmd)  # streams stdout/stderr directly to docker logs
+    if result.returncode == 0:
+        print(f"  OK: {label} loaded.", flush=True)
+        loaded.add(name)
+        save_state(loaded)
+    else:
+        print(f"  ERROR: {label} upload failed (exit {result.returncode})", flush=True)
+
+
+def load_loinc_zip(zip_path: str, loaded: set):
+    _hapi_cli_upload(zip_path, "http://loinc.org", "LOINC", loaded)
+
+
+def load_claml_zip(zip_path: str, loaded: set):
+    _hapi_cli_upload(zip_path, "http://hl7.org/fhir/sid/icd-10", "ICD-10", loaded)
+
+
+def _is_snomed_rf2(filename: str) -> bool:
+    low = filename.lower()
+    return "snomedct" in low or "snomed_ct" in low or low.startswith("sct_")
+
+
+def _is_loinc(filename: str) -> bool:
+    return "loinc" in filename.lower()
+
+
 def load_fhir_json(json_path: str, *, always_reload: bool = False) -> bool:
     name = os.path.basename(json_path)
     try:
@@ -291,7 +349,12 @@ def main():
             for filename in seed_files:
                 path = os.path.join(SEEDS_DIR, filename)
                 if filename.endswith(".zip"):
-                    load_snomed(path, loaded)
+                    if _is_snomed_rf2(filename):
+                        load_snomed(path, loaded)
+                    elif _is_loinc(filename):
+                        load_loinc_zip(path, loaded)
+                    else:
+                        load_claml_zip(path, loaded)
                 elif filename.endswith(".json"):
                     if filename in loaded:
                         print(f"  [seeds] SKIP {filename} (already loaded)", flush=True)

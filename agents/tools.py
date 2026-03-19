@@ -38,8 +38,7 @@ class TerminologyTools:
 
     def expand_value_set(self, value_set_url: str, filter: str = "") -> str:
         """
-        Expand a FHIR ValueSet and return a list of valid codes.
-        Use this before populating any coded field to find valid codes.
+        Expand a FHIR ValueSet to get valid codes. Use before populating any coded clinical field.
         Returns JSON with code, display, and system for each concept.
         """
         params = {"url": value_set_url, "count": "20"}
@@ -49,12 +48,9 @@ class TerminologyTools:
 
     def lookup_code(self, system: str, code: str) -> str:
         """
-        Look up a specific code in a code system.
-        Returns display name, definition, and whether the code is valid.
-        Use this to verify a code exists before using it.
+        Look up a specific code in a code system to verify it is valid and get its display name.
         """
-        params = {"system": system, "code": code}
-        return self._get("/CodeSystem/$lookup", params)
+        return self._get("/CodeSystem/$lookup", {"system": system, "code": code})
 
     def search_snomed(self, description: str) -> str:
         """
@@ -67,7 +63,7 @@ class TerminologyTools:
             "filter": description,
             "count": "5",
         }
-        return self._get("/ValueSet/$expand", params, server="snomed")
+        return self._get("/ValueSet/$expand", params)
 
     def search_loinc(self, description: str) -> str:
         """
@@ -79,32 +75,7 @@ class TerminologyTools:
             "filter": description,
             "count": "5",
         }
-        return self._get("/ValueSet/$expand", params, server="loinc")
-
-    def validate_code(self, system: str, code: str, value_set_url: str) -> str:
-        """
-        Validate whether a specific code is valid within a given ValueSet.
-        Returns true/false with an explanation.
-        """
-        params = {"url": value_set_url, "system": system, "code": code}
-        return self._get("/ValueSet/$validate-code", params)
-
-    def expand_value_set(self, value_set_url: str, filter: str = "") -> str:
-        """
-        Expand a FHIR ValueSet to get valid codes. Use before populating any coded clinical field.
-        Returns JSON with code, display, and system for each concept.
-        """
-        params = {"url": value_set_url, "count": "20"}
-        if filter:
-            params["filter"] = filter
-        # Route SNOMED ValueSets to Snowstorm, everything else to loinc/tx server
         return self._get("/ValueSet/$expand", params)
-
-    def lookup_code(self, system: str, code: str) -> str:
-        """
-        Look up a specific code in a code system to verify it is valid and get its display name.
-        """
-        return self._get("/CodeSystem/$lookup", {"system": system, "code": code})
 
     def validate_code(self, system: str, code: str, value_set_url: str) -> str:
         """

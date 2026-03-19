@@ -1,5 +1,3 @@
-version: "3.8"
-
 # Full EHR Populator stack.
 # Usage:
 #   docker compose up -d          start everything
@@ -11,7 +9,12 @@ services:
   # -------------------------------------------------------------------------
   # EHRbase — openEHR clinical data repository
   # -------------------------------------------------------------------------
+  # -------------------------------------------------------------------------
+  # EHRbase — openEHR clinical data repository  (profile: upload)
+  # Only started when you need to upload openEHR compositions: make start PROFILES=upload
+  # -------------------------------------------------------------------------
   ehrbase-db:
+    profiles: [upload]
     image: postgres:16
     environment:
       POSTGRES_USER: ehrbase
@@ -27,6 +30,7 @@ services:
       retries: 10
 
   ehrbase:
+    profiles: [upload]
     image: ehrbase/ehrbase:latest
     depends_on:
       ehrbase-db:
@@ -53,9 +57,11 @@ services:
       start_period: 30s
 
   # -------------------------------------------------------------------------
-  # HAPI FHIR Server — FHIR R4
+  # HAPI FHIR Server — FHIR R4  (profile: upload)
+  # Only started when you need to upload FHIR resources: make start PROFILES=upload
   # -------------------------------------------------------------------------
   fhir:
+    profiles: [upload]
     image: hapiproject/hapi:latest
     ports:
       - "8090:8080"
@@ -142,8 +148,6 @@ services:
       VALIDATOR_EHRBASE_PASSWORD: "SuperSecretPassword"
       VALIDATOR_FHIR_TERMINOLOGY_SERVER_URL: "http://snowstorm:8080/fhir"
     depends_on:
-      ehrbase:
-        condition: service_healthy
       snowstorm:
         condition: service_healthy
     healthcheck:

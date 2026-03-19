@@ -14,31 +14,44 @@ llm:
   # Optional: use a different (cheaper) model for the template analyzer
   # template_analyzer_model: claude-haiku-4-5-20251001
 
-# Java validation service (run: cd validator && mvn spring-boot:run)
+# ---------------------------------------------------------------------------
+# Server configuration
+#
+# By default all services run locally via docker compose.
+# To use existing servers instead, update the base_url fields below.
+# You do NOT need docker compose if you point to external servers.
+# ---------------------------------------------------------------------------
+
+# Java validation service — always required (part of this repo, runs in docker)
 validator:
   base_url: "http://localhost:8181"
 
-# EHRbase openEHR server (for uploading generated compositions)
+# Snowstorm terminology server — required for code lookups
+# Local (docker compose):  http://localhost:8085/fhir
+# Existing Snowstorm:      https://your-snowstorm.example.com/fhir
+terminology:
+  base_url: "http://localhost:8085/fhir"
+  # bearer_token: set via TERMINOLOGY_TOKEN env var
+
+# EHRbase openEHR server — only needed if you want to upload compositions
+# Local (docker compose):  http://localhost:8080/ehrbase
+# Existing EHRbase:        https://your-ehrbase.example.com/ehrbase
 ehrbase:
   enabled: false
   base_url: "http://localhost:8080/ehrbase"
   username: "ehrbase-user"
   # password: set via EHRBASE_PASSWORD env var
 
-# FHIR server (for uploading generated FHIR resources)
+# FHIR server — only needed if you want to upload FHIR resources
+# Local (docker compose):  http://localhost:8090/fhir
+# Existing HAPI FHIR:      https://your-fhir.example.com/fhir
 fhir_server:
   enabled: false
   base_url: "http://localhost:8090/fhir"
   # bearer_token: set via FHIR_BEARER_TOKEN env var
 
-# Snowstorm terminology server — handles SNOMED CT, LOINC, and other loaded code systems.
-# Load SNOMED CT (RF2) and LOINC into Snowstorm before running the pipeline.
-# Local (docker compose): http://localhost:8085/fhir
-terminology:
-  base_url: "http://localhost:8085/fhir"
-  # bearer_token: set via TERMINOLOGY_TOKEN env var (not needed for local Snowstorm)
-
 pipeline:
   max_retries: 5             # Max validation retry attempts per composition
   output_dir: "../output"    # Where to write generated files
   save_intermediate: true    # Save after each successful generation
+  workers: 4                 # Parallel patients (increase for higher throughput)
