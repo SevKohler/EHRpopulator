@@ -24,6 +24,63 @@ OPT / StructureDefinition
 
 Terminology lookups (SNOMED CT, LOINC, ICD-10) are done via **Snowstorm** during generation.
 
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Python Agent Pipeline                        │
+│                                                                  │
+│  ┌──────────────────────┐                                        │
+│  │  TemplateAnalyzer    │  OPT → web template (EHRbase SDK)     │
+│  │                      │  StructureDefinition → parsed directly │
+│  │                      │  paths, types, descriptions, annotations│
+│  └──────────┬───────────┘                                        │
+│             │ TemplateAnalysis (no LLM used)                     │
+│             ▼                                                     │
+│  ┌──────────────────────┐                                        │
+│  │  JourneyGenerator    │  Generates realistic patient journey   │
+│  │                      │  demographics, events, clinical values  │
+│  └──────────┬───────────┘                                        │
+│             │ PatientJourney                                      │
+│             ▼                                                     │
+│  ┌──────────────────────┐   tool calls    ┌──────────────────┐  │
+│  │  ResourceComposer    │◄───────────────►│    Snowstorm     │  │
+│  │                      │                 │  ValueSet expand │  │
+│  │  openEHR / FHIR JSON │                 │  SNOMED ECL      │  │
+│  └──────────┬───────────┘                 │  LOINC search    │  │
+│             │ raw JSON                    └──────────────────┘  │
+│             ▼                                                     │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │                    Validation Loop                        │   │
+│  │   POST /validate ──► Java Validator ──► errors?          │   │
+│  │         ▲                                    │            │   │
+│  │         └──── feed errors back to composer ◄─┘            │   │
+│  │                     (up to max_retries)                   │   │
+│  └──────────┬─────────────────────────────────────────────── ┘  │
+│             ▼                                                     │
+│       Upload (optional) → EHRbase / FHIR server                 │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│              Java Validator Service  :8181                       │
+│                                                                  │
+│  POST /validate                                                  │
+│  ┌──────────────┐    ┌─────────────────────────────────────┐   │
+│  │  FHIR_R4     │───►│  HAPI FHIR 7.x                      │   │
+│  │              │    │  base spec + inline StructureDefinition│  │
+│  │              │    │  code validation via Snowstorm        │   │
+│  └──────────────┘    └─────────────────────────────────────┘   │
+│  ┌──────────────┐    ┌─────────────────────────────────────┐   │
+│  │  OPENEHR_*   │───►│  EHRbase SDK (offline)              │   │
+│  │              │    │  + EHRbase server (optional)         │   │
+│  └──────────────┘    └─────────────────────────────────────┘   │
+│                                                                  │
+│  POST /webtemplate                                               │
+│  ┌──────────────┐    ┌─────────────────────────────────────┐   │
+│  │  OPT XML     │───►│  EHRbase SDK opt-normalizer          │   │
+│  │              │    │  → web template JSON                 │   │
+│  └──────────────┘    └─────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## Setup
