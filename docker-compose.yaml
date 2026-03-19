@@ -1,20 +1,20 @@
 # Full EHR Populator stack.
-# Usage:
-#   docker compose up -d          start everything
-#   docker compose logs -f        watch all logs
-#   docker compose logs -f terminology-loader   watch terminology loading progress
+#
+# Start everything:
+#   docker compose up -d
+#
+# Start only specific services (e.g. you already have Snowstorm + EHRbase running):
+#   docker compose up -d validator terminology-loader fhir
+#
+# Watch terminology loading:
+#   docker compose logs -f terminology-loader
 
 services:
 
   # -------------------------------------------------------------------------
   # EHRbase — openEHR clinical data repository
   # -------------------------------------------------------------------------
-  # -------------------------------------------------------------------------
-  # EHRbase — openEHR clinical data repository  (profile: upload)
-  # Only started when you need to upload openEHR compositions: make start PROFILES=upload
-  # -------------------------------------------------------------------------
   ehrbase-db:
-    profiles: [upload]
     image: postgres:16
     environment:
       POSTGRES_USER: ehrbase
@@ -30,7 +30,6 @@ services:
       retries: 10
 
   ehrbase:
-    profiles: [upload]
     image: ehrbase/ehrbase:latest
     depends_on:
       ehrbase-db:
@@ -57,11 +56,9 @@ services:
       start_period: 30s
 
   # -------------------------------------------------------------------------
-  # HAPI FHIR Server — FHIR R4  (profile: upload)
-  # Only started when you need to upload FHIR resources: make start PROFILES=upload
+  # HAPI FHIR Server — FHIR R4
   # -------------------------------------------------------------------------
   fhir:
-    profiles: [upload]
     image: hapiproject/hapi:latest
     ports:
       - "8090:8080"
@@ -115,9 +112,9 @@ services:
 
   # -------------------------------------------------------------------------
   # Terminology loader
-  # Watches the ./terminology folder and loads files into Snowstorm on startup.
-  # Drop files and restart: docker compose restart terminology-loader
-  # Watch progress:         docker compose logs -f terminology-loader
+  # Loads files from ./terminology/seeds (once) and ./terminology/fhir (on every restart).
+  # Restart to reload: docker compose restart terminology-loader
+  # Watch progress:    docker compose logs -f terminology-loader
   # -------------------------------------------------------------------------
   terminology-loader:
     build:
@@ -134,7 +131,7 @@ services:
 
   # -------------------------------------------------------------------------
   # Java validator service — HAPI FHIR + EHRbase SDK
-  # POST /validate  — validate openEHR or FHIR resources
+  # POST /validate    — validate openEHR or FHIR resources
   # POST /webtemplate — convert OPT XML to web template JSON
   # -------------------------------------------------------------------------
   validator:

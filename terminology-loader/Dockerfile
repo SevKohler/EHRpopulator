@@ -11,11 +11,10 @@ RUN curl -sSL -o /tmp/hapi-cli.zip \
     && mkdir -p /opt/hapi \
     && unzip -q /tmp/hapi-cli.zip -d /opt/hapi/ \
     && chmod +x /opt/hapi/hapi-fhir-cli \
-    && ln -s /opt/hapi/hapi-fhir-cli /usr/local/bin/hapi-fhir-cli \
     && rm /tmp/hapi-cli.zip
 
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
-ENV PATH="$JAVA_HOME/bin:$PATH"
+ENV PATH="$JAVA_HOME/bin:/opt/hapi:$PATH"
 
 RUN pip install requests
 COPY load.py /load.py
