@@ -441,7 +441,15 @@ class Pipeline:
         suffix = "json"
         filename = (f"{resource.format.value.lower()}_{resource.patient_id}"
                     f"_attempt{resource.generation_attempt}_{index}.{suffix}")
-        out_path = self.output_dir / filename
+
+        # Failed compositions go to output/errors/, valid ones to output/
+        if resource.valid:
+            out_dir = self.output_dir
+        else:
+            out_dir = self.output_dir / "errors"
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+        out_path = out_dir / filename
         try:
             pretty = json.dumps(json.loads(resource.content), indent=2, ensure_ascii=False)
         except (json.JSONDecodeError, ValueError):
@@ -449,17 +457,27 @@ class Pipeline:
         out_path.write_text(pretty, encoding="utf-8")
         resource.output_path = str(out_path)
 
-        # Save metadata alongside
-        meta_path = self.output_dir / (filename.replace(".json", ".meta.json"))
-        meta = {
-            "patient_id": resource.patient_id,
-            "template_id": resource.template_id,
-            "format": resource.format.value,
-            "valid": resource.valid,
-            "generation_attempt": resource.generation_attempt,
-            "issue_count": len(resource.validation_issues),
-        }
-        meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        # For failures: write a companion .errors.json with the validation issues
+        if not resource.valid:
+            errors_path = out_dir / filename.replace(".json", ".errors.json")
+            errors_data = {
+                "patient_id": resource.patient_id,
+                "template_id": resource.template_id,
+                "format": resource.format.value,
+                "generation_attempt": resource.generation_attempt,
+                "issue_count": len(resource.validation_issues),
+                "errors": [
+                    {"severity": i.severity, "location": i.location, "message": i.message}
+                    for i in resource.validation_issues
+                    if i.severity in ("ERROR", "FATAL")
+                ],
+                "warnings": [
+                    {"severity": i.severity, "location": i.location, "message": i.message}
+                    for i in resource.validation_issues
+                    if i.severity == "WARNING"
+                ],
+            }
+            errors_path.write_text(json.dumps(errors_data, indent=2), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
