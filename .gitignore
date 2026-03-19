@@ -28,6 +28,10 @@ output/
 *.ndjson
 *.parquet
 
+# Terminology files (large binaries — load locally, never commit)
+terminology/*
+!terminology/README.md
+
 # EHRbase / FHIR server local config
 ehrbase.env
 fhir-server.env
