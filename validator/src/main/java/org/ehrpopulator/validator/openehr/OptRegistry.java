@@ -2,13 +2,14 @@ package org.ehrpopulator.validator.openehr;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.ehrbase.openehr.sdk.webtemplate.builder.WebTemplateBuilder;
+import org.ehrbase.openehr.sdk.webtemplate.model.WebTemplate;
 import org.openehr.schemas.v1.OPERATIONALTEMPLATE;
+import org.openehr.schemas.v1.TemplateDocument;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import org.xmlbeam.XBProjector;
 
-import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -17,8 +18,9 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * In-memory registry of loaded OPTs (Operational Templates).
  *
- * OPTs can be pre-loaded at startup from the templates/ directory,
- * or registered at runtime via the validation request's opt_xml field.
+ * OPTs can be registered at runtime via the validation request's opt_xml field.
+ * Both the parsed OPERATIONALTEMPLATE (for CompositionValidator) and the WebTemplate
+ * (for flat JSON deserialization) are stored per template ID.
  *
  * Thread-safe for concurrent validation requests.
  */
@@ -27,8 +29,8 @@ public class OptRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(OptRegistry.class);
 
-    // templateId -> parsed OPERATIONALTEMPLATE
-    private final Map<String, OPERATIONALTEMPLATE> templates = new ConcurrentHashMap<>();
+    private final Map<String, OPERATIONALTEMPLATE> opts = new ConcurrentHashMap<>();
+    private final Map<String, WebTemplate> webTemplates = new ConcurrentHashMap<>();
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -38,63 +40,45 @@ public class OptRegistry {
      */
     public void register(String optXml) {
         try {
-            var factory = DocumentBuilderFactory.newInstance();
-            factory.setNamespaceAware(true);
-            var builder = factory.newDocumentBuilder();
-            var document = builder.parse(new ByteArrayInputStream(
-                optXml.getBytes(StandardCharsets.UTF_8)));
+            OPERATIONALTEMPLATE opt = TemplateDocument.Factory.parse(
+                    new ByteArrayInputStream(optXml.getBytes(StandardCharsets.UTF_8))
+            ).getTemplate();
 
-            // Use EHRbase SDK to parse OPT XML
-            var opt = org.ehrbase.openehr.sdk.opt.normalizer.OptNormalizer.parse(optXml);
             String templateId = opt.getTemplateId().getValue();
-            templates.put(templateId, opt);
+            opts.put(templateId, opt);
+            webTemplates.put(templateId, new WebTemplateBuilder().build(opt, false));
             log.info("Registered OPT: {}", templateId);
         } catch (Exception e) {
             throw new RuntimeException("Failed to parse OPT XML: " + e.getMessage(), e);
         }
     }
 
-    /**
-     * Look up a registered OPT by template ID.
-     * Returns null if not registered.
-     */
     public OPERATIONALTEMPLATE getOpt(String templateId) {
-        return templates.get(templateId);
+        return opts.get(templateId);
+    }
+
+    public WebTemplate getWebTemplate(String templateId) {
+        return webTemplates.get(templateId);
     }
 
     /**
-     * Detect the template ID from a composition.
+     * Detect the template ID from a composition (canonical or flat JSON).
      *
-     * For canonical JSON compositions, looks at:
-     * $.archetype_details.template_id.value
-     *
-     * For flat JSON compositions, looks at keys like
-     * ctx/template_id or _template_id.
+     * Canonical JSON: $.archetype_details.template_id.value
+     * Flat JSON:      ctx/template_id  or  _template_id
      */
     public String detectTemplateId(String compositionJson) {
         try {
             JsonNode root = objectMapper.readTree(compositionJson);
 
-            // Canonical JSON path
-            JsonNode templateIdNode = root
-                .path("archetype_details")
-                .path("template_id")
-                .path("value");
-            if (!templateIdNode.isMissingNode()) {
-                return templateIdNode.asText();
-            }
+            JsonNode canonical = root.path("archetype_details").path("template_id").path("value");
+            if (!canonical.isMissingNode()) return canonical.asText();
 
-            // Flat JSON: ctx/template_id
-            JsonNode ctxTemplateId = root.path("ctx/template_id");
-            if (!ctxTemplateId.isMissingNode()) {
-                return ctxTemplateId.asText();
-            }
+            JsonNode ctx = root.path("ctx/template_id");
+            if (!ctx.isMissingNode()) return ctx.asText();
 
-            // Flat JSON: _template_id at top level
-            JsonNode underscoreTemplateId = root.path("_template_id");
-            if (!underscoreTemplateId.isMissingNode()) {
-                return underscoreTemplateId.asText();
-            }
+            JsonNode underscore = root.path("_template_id");
+            if (!underscore.isMissingNode()) return underscore.asText();
 
         } catch (Exception e) {
             log.warn("Could not detect template ID from composition: {}", e.getMessage());
@@ -103,6 +87,6 @@ public class OptRegistry {
     }
 
     public Map<String, OPERATIONALTEMPLATE> getAll() {
-        return Map.copyOf(templates);
+        return Map.copyOf(opts);
     }
 }

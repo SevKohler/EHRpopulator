@@ -92,7 +92,10 @@ public class OpenEhrValidationService {
 
     /**
      * Offline validation using the EHRbase openEHR SDK.
-     * Validates composition structure against OPT constraints.
+     *
+     * For canonical JSON: deserializes directly to Composition, then validates.
+     * For flat JSON: uses the WebTemplate (built from the OPT) to deserialize
+     *   flat paths to a Composition, then validates with CompositionValidator.
      */
     private List<ValidationResponse.Issue> sdkValidate(ValidationRequest request) {
         List<ValidationResponse.Issue> issues = new ArrayList<>();
@@ -108,21 +111,19 @@ public class OpenEhrValidationService {
             if (opt == null) {
                 issues.add(new ValidationResponse.Issue("WARNING", "/",
                     "OPT not registered for template '" + templateId +
-                    "'. Pass opt_xml in request or pre-load via /templates endpoint."));
+                    "'. Pass opt_xml in request."));
                 return issues;
             }
 
-            // Use EHRbase SDK validator
-            // org.ehrbase.openehr.sdk.validation.CompositionValidator
+            var composition = parseComposition(request.getContent(), request.getFormat(), templateId);
             var validator = new org.ehrbase.openehr.sdk.validation.CompositionValidator();
-            var composition = parseComposition(request.getContent(), request.getFormat());
             var results = validator.validate(composition, opt);
 
             for (var r : results) {
                 issues.add(new ValidationResponse.Issue(
-                    r.getType().name(),
-                    r.getAqlPath(),
-                    r.getMessage()
+                    "ERROR",
+                    r.getAqlPath() != null ? r.getAqlPath() : "/",
+                    r.getMessage() != null ? r.getMessage() : r.toString()
                 ));
             }
         } catch (Exception e) {
@@ -198,17 +199,28 @@ public class OpenEhrValidationService {
         return issues;
     }
 
-    private org.ehrbase.openehr.sdk.response.dto.ehrscape.CompositionDto parseComposition(
-            String content, String format) throws Exception {
-        // Delegate to EHRbase SDK serialization utilities
-        // This is a simplified stub — actual implementation depends on SDK version
-        // org.ehrbase.openehr.sdk.serialisation.jsonencoding.CanonicalJson
-        // or org.ehrbase.openehr.sdk.serialisation.flatencoding.FlatJson
-        var walker = new org.ehrbase.openehr.sdk.serialisation.jsonencoding.CanonicalJson();
-        var composition = walker.unmarshal(content,
-            com.nedap.archie.rm.composition.Composition.class);
-        return new org.ehrbase.openehr.sdk.response.dto.ehrscape.CompositionDto(
-            composition, null, null, null);
+    /**
+     * Deserialize composition JSON to a Composition RM object.
+     *
+     * Canonical JSON maps 1:1 to the RM structure — deserialized directly via CanonicalJson.
+     * Flat JSON uses dot-notation paths from the web template — deserialized via
+     * FlatJasonProvider which needs the WebTemplate to resolve paths.
+     */
+    private com.nedap.archie.rm.composition.Composition parseComposition(
+            String content, String format, String templateId) throws Exception {
+        if ("OPENEHR_FLAT".equals(format)) {
+            var webTemplate = optRegistry.getWebTemplate(templateId);
+            if (webTemplate == null) {
+                throw new IllegalStateException(
+                    "WebTemplate not available for '" + templateId + "' — cannot deserialize flat JSON");
+            }
+            var provider = new org.ehrbase.openehr.sdk.serialisation.flatencoding.FlatJasonProvider(
+                java.util.Collections.singletonMap(templateId, webTemplate));
+            return provider.buildCompositionFromFlatJson(templateId, content);
+        } else {
+            return new org.ehrbase.openehr.sdk.serialisation.jsonencoding.CanonicalJson()
+                .unmarshal(content, com.nedap.archie.rm.composition.Composition.class);
+        }
     }
 
     @SuppressWarnings("unchecked")

@@ -26,7 +26,7 @@
         <hapi.fhir.version>7.6.0</hapi.fhir.version>
 
         <!-- Check https://github.com/ehrbase/openEHR_SDK/releases for latest -->
-        <ehrbase.sdk.version>2.9.0</ehrbase.sdk.version>
+        <ehrbase.sdk.version>2.30.0</ehrbase.sdk.version>
 
         <spring.boot.version>3.3.5</spring.boot.version>
         <jackson.version>2.18.2</jackson.version>
@@ -96,11 +96,6 @@
         </dependency>
         <dependency>
             <groupId>org.ehrbase.openehr.sdk</groupId>
-            <artifactId>opt-normalizer</artifactId>
-            <version>${ehrbase.sdk.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.ehrbase.openehr.sdk</groupId>
             <artifactId>web-template</artifactId>
             <version>${ehrbase.sdk.version}</version>
         </dependency>
@@ -136,11 +131,4 @@
         </plugins>
     </build>
 
-    <repositories>
-        <!-- EHRbase SDK may require their repo if not yet on Maven Central -->
-        <repository>
-            <id>jitpack.io</id>
-            <url>https://jitpack.io</url>
-        </repository>
-    </repositories>
 </project>

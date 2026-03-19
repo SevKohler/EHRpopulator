@@ -1,20 +1,22 @@
 package org.ehrpopulator.validator.openehr;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.ehrbase.openehr.sdk.opt.normalizer.OptNormalizer;
 import org.ehrbase.openehr.sdk.webtemplate.builder.WebTemplateBuilder;
 import org.ehrbase.openehr.sdk.webtemplate.model.WebTemplate;
-import org.openehr.schemas.v1.OPERATIONALTEMPLATE;
+import org.openehr.schemas.v1.TemplateDocument;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Converts OPT XML to web template JSON using the EHRbase SDK.
  *
  * Uses:
- *   org.ehrbase.openehr.sdk:opt-normalizer  — parses OPT XML into OPERATIONALTEMPLATE
- *   org.ehrbase.openehr.sdk:web-template    — builds the WebTemplate from OPERATIONALTEMPLATE
+ *   org.openehr.schemas.v1.TemplateDocument  — parses OPT XML into OPERATIONALTEMPLATE (Archie)
+ *   org.ehrbase.openehr.sdk:web-template     — builds the WebTemplate from OPERATIONALTEMPLATE
  *
  * The resulting web template JSON includes:
  *   - Flat composition paths (aqlPath) for every element
@@ -42,16 +44,14 @@ public class WebTemplateConverter {
      * @throws Exception if the OPT is malformed or conversion fails
      */
     public String toWebTemplate(String optXml) throws Exception {
-        // Step 1: Parse OPT XML into the openEHR schema object
-        OPERATIONALTEMPLATE opt = OptNormalizer.parse(optXml);
+        var opt = TemplateDocument.Factory.parse(
+                new ByteArrayInputStream(optXml.getBytes(StandardCharsets.UTF_8))
+        ).getTemplate();
         log.debug("Parsed OPT: {}", opt.getTemplateId().getValue());
 
-        // Step 2: Build the WebTemplate using the EHRbase SDK builder
-        WebTemplate webTemplate = new WebTemplateBuilder()
-            .build(opt, false);
+        WebTemplate webTemplate = new WebTemplateBuilder().build(opt, false);
 
-        // Step 3: Serialize to JSON
         return objectMapper.writerWithDefaultPrettyPrinter()
-            .writeValueAsString(webTemplate);
+                .writeValueAsString(webTemplate);
     }
 }
