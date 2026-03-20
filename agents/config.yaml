@@ -2,14 +2,12 @@
 # Copy to config.local.yaml and fill in secrets, or use environment variables.
 
 llm:
-  provider: anthropic          # anthropic | openai | azure | ollama
-  model: claude-opus-4-5       # Model to use for all agents
-  # api_key: set via ANTHROPIC_API_KEY env var (preferred over hardcoding)
+  provider: ${LLM_PROVIDER:anthropic}   # anthropic | openai | azure | custom
+  model: ${LLM_MODEL:claude-opus-4-5}
+  api_key: ${LLM_API_KEY:}             # or ANTHROPIC_API_KEY / OPENAI_API_KEY
+  base_url: ${LLM_BASE_URL:}           # for self-hosted OpenAI-compatible servers
   temperature: 0.7
-  max_tokens: 8192
-  # For OpenAI / Azure:
-  # base_url: https://your-endpoint.openai.azure.com
-  # deployment: your-deployment-name
+  max_tokens: 16384
 
   # Optional: use a different (cheaper) model for the template analyzer
   # template_analyzer_model: claude-haiku-4-5-20251001

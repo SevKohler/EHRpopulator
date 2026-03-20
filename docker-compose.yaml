@@ -102,6 +102,8 @@ services:
         condition: service_healthy
     ports:
       - "8085:8080"
+    volumes:
+      - ${PWD}/terminology/seeds:${PWD}/terminology/seeds:ro
     entrypoint: java -Xms2g -Xmx4g --add-opens java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED -cp @/app/jib-classpath-file org.snomed.snowstorm.SnowstormApplication --elasticsearch.urls=http://snowstorm-es:9200
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/branches"]

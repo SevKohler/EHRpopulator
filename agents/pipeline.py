@@ -113,13 +113,21 @@ class Pipeline:
             struct_def: str | None = None
 
             if template_type == TemplateType.OPENEHR_OPT:
-                console.print(f"  Converting [cyan]{template_path.name}[/cyan] → web template...")
-                web_template = self._opt_to_web_template(template_content)
-                if not web_template:
-                    raise RuntimeError(
-                        f"OPT conversion failed for {template_path.name}. "
-                        f"Start the validator: cd validator && mvn spring-boot:run"
-                    )
+                # Check for cached web template next to the OPT file
+                cached_wt = template_path.with_suffix(".json")
+                if cached_wt.exists():
+                    console.print(f"  Using cached web template: [cyan]{cached_wt.name}[/cyan]")
+                    web_template = cached_wt.read_text(encoding="utf-8")
+                else:
+                    console.print(f"  Converting [cyan]{template_path.name}[/cyan] → web template...")
+                    web_template = self._opt_to_web_template(template_content)
+                    if not web_template:
+                        raise RuntimeError(
+                            f"OPT conversion failed for {template_path.name}. "
+                            f"Start the validator: cd validator && mvn spring-boot:run"
+                        )
+                    cached_wt.write_text(web_template, encoding="utf-8")
+                    console.print(f"  Saved web template → [dim]{cached_wt}[/dim]")
                 opt_xml = template_content
                 template_content = web_template
                 template_type = TemplateType.OPENEHR_WEB_TEMPLATE
@@ -150,13 +158,7 @@ class Pipeline:
         total = count * len(analyses)
         lock = threading.Lock()
 
-        # Wipe and recreate journey debug folder (keep max 10 samples)
-        journey_dir = self.output_dir / "journeys"
-        if journey_dir.exists():
-            import shutil
-            shutil.rmtree(journey_dir)
-        journey_dir.mkdir(parents=True)
-        JOURNEY_SAMPLE_LIMIT = 10
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Live display: progress bar on top, verbose log for patient 1 below
         log_lines: list[str] = []
@@ -176,12 +178,15 @@ class Pipeline:
         def _get_renderable():
             with log_lock:
                 lines = log_lines[-LOG_MAX:]
-            body = "\n".join(lines) if lines else "[dim]Waiting for patient 1...[/dim]"
-            return Group(
-                progress,
-                Panel(body, title="[bold cyan]Patient 1 — live[/bold cyan]",
-                      border_style="dim cyan", padding=(0, 1)),
-            )
+            if not lines:
+                body = "[dim]Waiting for patient 1...[/dim]"
+                content = Panel(body, title="[bold cyan]Patient 1 — live[/bold cyan]",
+                                border_style="dim cyan", padding=(0, 1))
+            else:
+                parts = [item if not isinstance(item, str) else item for item in lines]
+                content = Panel(Group(*parts), title="[bold cyan]Patient 1 — live[/bold cyan]",
+                                border_style="dim cyan", padding=(0, 1))
+            return Group(progress, content)
 
         def process_patient(i: int, live: Live) -> list[GeneratedResource]:
             verbose = (i == 0)
@@ -207,11 +212,11 @@ class Pipeline:
                 expand=False,
             ))
 
-            with lock:
-                if i < JOURNEY_SAMPLE_LIMIT:
-                    (journey_dir / f"journey_{i+1}_{journey.patient_id}.json").write_text(
-                        journey.model_dump_json(indent=2), encoding="utf-8"
-                    )
+            patient_dir = self.output_dir / journey.patient_id
+            patient_dir.mkdir(parents=True, exist_ok=True)
+            (patient_dir / "journey.json").write_text(
+                journey.model_dump_json(indent=2), encoding="utf-8"
+            )
 
             patient_resources = []
             for j, (analysis, opt_xml, struct_def) in enumerate(template_infos):
@@ -267,13 +272,31 @@ class Pipeline:
         if log_fn is None:
             log_fn = lambda _: None  # noqa: E731
 
+        # For canonical output: always generate FLAT internally, then convert.
+        # This keeps all LLM composition logic in one place (flat format only).
+        compose_format = (
+            ResourceFormat.OPENEHR_FLAT
+            if format == ResourceFormat.OPENEHR_CANONICAL
+            else format
+        )
+
         validation_errors = ""
 
         for attempt in range(1, self.max_retries + 1):
             log_fn(f"  [dim]Attempt {attempt}/{self.max_retries} — composing...[/dim]")
 
-            raw = self.composer.compose(journey, analysis, format.value, validation_errors)
+            raw = self.composer.compose(journey, analysis, compose_format.value, validation_errors)
             raw = _strip_markdown(raw)
+
+            # Convert flat → canonical via the SDK if canonical output was requested
+            if format == ResourceFormat.OPENEHR_CANONICAL:
+                log_fn(f"  [dim]Converting flat → canonical...[/dim]")
+                canonical = self._flat_to_canonical(raw, opt_xml, analysis.template_id)
+                if canonical is None:
+                    log_fn(f"  [yellow]Flat→canonical conversion failed — retrying[/yellow]")
+                    validation_errors = "Flat-to-canonical conversion failed. Check all paths are valid."
+                    continue
+                raw = canonical
 
             log_fn(f"  [dim]Validating...[/dim]")
             result = self._validate(raw, format, opt_xml, structure_def_json)
@@ -307,6 +330,38 @@ class Pipeline:
                 log_fn(f"  [red]Max retries reached — saving best-effort result.[/red]")
 
         return resource  # type: ignore[return-value]
+
+    def _flat_to_canonical(
+        self,
+        flat_json: str,
+        opt_xml: str | None,
+        template_id: str,
+    ) -> str | None:
+        """POST flat JSON to the validator /to-canonical endpoint and return canonical JSON."""
+        try:
+            payload: dict[str, Any] = {
+                "flat_json": flat_json,
+                "template_id": template_id,
+            }
+            if opt_xml:
+                payload["opt_xml"] = opt_xml
+
+            r = requests.post(
+                f"{self.validator_url}/to-canonical",
+                json=payload,
+                timeout=30,
+            )
+            if r.status_code == 200:
+                return r.text
+            console.print(
+                f"  [yellow]/to-canonical returned {r.status_code}:[/yellow] {r.text[:300]}"
+            )
+        except requests.exceptions.ConnectionError:
+            console.print(
+                f"  [red]Cannot reach validator at {self.validator_url}.[/red] "
+                "Start it with: cd validator && mvn spring-boot:run"
+            )
+        return None
 
     def _opt_to_web_template(self, opt_xml: str) -> str | None:
         """POST OPT XML to the Java validator service and get back web template JSON."""
@@ -444,16 +499,16 @@ class Pipeline:
     # ------------------------------------------------------------------
 
     def _save(self, resource: GeneratedResource, index: int) -> None:
-        suffix = "json"
-        filename = (f"{resource.format.value.lower()}_{resource.patient_id}"
-                    f"_attempt{resource.generation_attempt}_{index}.{suffix}")
+        # Valid → output/{patient_id}/flat_{template_id}.json
+        # Failed → output/errors/{patient_id}/flat_{template_id}.json + .errors.json
+        template_slug = re.sub(r"[^\w\-]", "_", resource.template_id)
+        filename = f"flat_{template_slug}.json"
 
-        # Failed compositions go to output/errors/, valid ones to output/
         if resource.valid:
-            out_dir = self.output_dir
+            out_dir = self.output_dir / resource.patient_id
         else:
-            out_dir = self.output_dir / "errors"
-            out_dir.mkdir(parents=True, exist_ok=True)
+            out_dir = self.output_dir / "errors" / resource.patient_id
+        out_dir.mkdir(parents=True, exist_ok=True)
 
         out_path = out_dir / filename
         try:
@@ -463,9 +518,7 @@ class Pipeline:
         out_path.write_text(pretty, encoding="utf-8")
         resource.output_path = str(out_path)
 
-        # For failures: write a companion .errors.json with the validation issues
         if not resource.valid:
-            errors_path = out_dir / filename.replace(".json", ".errors.json")
             errors_data = {
                 "patient_id": resource.patient_id,
                 "template_id": resource.template_id,
@@ -483,6 +536,7 @@ class Pipeline:
                     if i.severity == "WARNING"
                 ],
             }
+            errors_path = out_dir / filename.replace(".json", ".errors.json")
             errors_path.write_text(json.dumps(errors_data, indent=2), encoding="utf-8")
 
 

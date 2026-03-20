@@ -9,8 +9,6 @@ Reads from:
 Runs on the host via the agents venv, talking to Snowstorm at localhost:8085.
 """
 
-import csv
-import io
 import json
 import os
 import time
@@ -126,59 +124,77 @@ def poll_snomed_import(snowstorm_url: str, import_id: str) -> str:
     return data.get("status", "UNKNOWN")
 
 
+
+
 # ---------------------------------------------------------------------------
-# LOINC CSV → FHIR CodeSystem
+# hapi-fhir-cli upload helper
 # ---------------------------------------------------------------------------
 
-def loinc_zip_to_fhir(zip_path: Path) -> dict:
+_HAPI_CLI_DIR = REPO_ROOT / "terminology" / "hapi-fhir-cli"
+_HAPI_CLI_VERSION = "8.8.1"
+_HAPI_CLI_URL = (
+    f"https://github.com/hapifhir/hapi-fhir/releases/download"
+    f"/v{_HAPI_CLI_VERSION}/hapi-fhir-{_HAPI_CLI_VERSION}-cli.zip"
+)
+
+
+def _ensure_hapi_cli(log=print) -> list[str] | None:
     """
-    Read LoincTable/Loinc.csv from the LOINC distribution zip and build
-    a FHIR R4 CodeSystem with all active concepts.
+    Return the command prefix to invoke hapi-fhir-cli.
+    Prefers a system install, falls back to the downloaded JAR.
+    Downloads the JAR automatically if neither is available.
+    Returns None if java is not found.
     """
-    with zipfile.ZipFile(zip_path) as zf:
-        # Find Loinc.csv inside the zip (may be in a subfolder)
-        csv_name = next(
-            (n for n in zf.namelist() if n.lower().endswith("loinc.csv") and "loincuniversallabordersobservations" not in n.lower()),
-            None,
-        )
-        if csv_name is None:
-            raise FileNotFoundError(f"Could not find Loinc.csv in {zip_path.name}")
+    import stat
+    import subprocess
+    import urllib.request
 
-        with zf.open(csv_name) as raw:
-            text = io.TextIOWrapper(raw, encoding="utf-8-sig")
-            reader = csv.DictReader(text)
-            concepts = []
-            for row in reader:
-                code = row.get("LOINC_NUM", "").strip()
-                status = row.get("STATUS", "").strip().upper()
-                if not code or status == "DEPRECATED":
-                    continue
-                display = (
-                    row.get("LONG_COMMON_NAME") or
-                    row.get("SHORTNAME") or
-                    row.get("COMPONENT", "")
-                ).strip()
-                if not display:
-                    continue
-                concepts.append({"code": code, "display": display})
+    local_cli = _HAPI_CLI_DIR / "hapi-fhir-cli"
+    if not local_cli.exists():
+        log(f"  Downloading hapi-fhir-cli {_HAPI_CLI_VERSION}...")
+        _HAPI_CLI_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            zip_path = _HAPI_CLI_DIR / "hapi-fhir-cli.zip"
+            urllib.request.urlretrieve(_HAPI_CLI_URL, zip_path)
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(_HAPI_CLI_DIR)
+            zip_path.unlink(missing_ok=True)
+            local_cli.chmod(local_cli.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        except Exception:
+            return None
 
-    # Try to extract version from filename e.g. Loinc_2.82.zip
-    version = ""
-    for part in zip_path.stem.split("_"):
-        if part.replace(".", "").isdigit():
-            version = part
-            break
+    return [str(local_cli)]
 
-    return {
-        "resourceType": "CodeSystem",
-        "url": "http://loinc.org",
-        "version": version,
-        "name": "LOINC",
-        "title": "Logical Observation Identifiers Names and Codes (LOINC)",
-        "status": "active",
-        "content": "complete",
-        "concept": concepts,
-    }
+
+def _hapi_cli_upload(zip_path: Path, fhir_url: str, system_url: str, log=print) -> tuple[bool, str]:
+    """
+    Run: hapi-fhir-cli upload-terminology -d <zip> -v r4 -t <fhir_url> -u <system_url>
+    Auto-downloads the hapi-fhir-cli JAR if needed.
+    Returns (ok, message).
+    """
+    import subprocess
+
+    cmd_prefix = _ensure_hapi_cli(log)
+    if cmd_prefix is None:
+        return False, "java not found on PATH — install Java to use hapi-fhir-cli"
+
+    cmd = cmd_prefix + [
+        "upload-terminology",
+        "-d", str(zip_path.resolve()),
+        "-v", "r4",
+        "-t", fhir_url,
+        "-u", system_url,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if proc.returncode == 0:
+            return True, "ok"
+        output = "\n".join(filter(None, [proc.stdout, proc.stderr]))
+        return False, output[-1200:]
+    except subprocess.TimeoutExpired:
+        return False, "hapi-fhir-cli timed out after 600s"
+    except Exception as e:
+        return False, str(e)
 
 
 # ---------------------------------------------------------------------------
@@ -331,26 +347,22 @@ def load_seeds(snowstorm_url: str, fhir_base: str, log=print) -> dict:
                         result.message = "already loaded"
                         loaded.add(name); save_state(loaded)
                     else:
-                        log(f"  Converting LOINC CSV from {name}...")
-                        cs = loinc_zip_to_fhir(path)
-                        log(f"  Uploading {len(cs['concept'])} LOINC concepts to Snowstorm...")
-                        ok, msg = post_code_system(fhir_base, cs)
+                        log(f"  Uploading {name} via hapi-fhir-cli...")
+                        ok, msg = _hapi_cli_upload(path, fhir_base, "http://loinc.org", log)
                         result.ok = ok
                         result.message = msg
                         if ok:
                             loaded.add(name); save_state(loaded)
 
                 else:
-                    # Assume ICD-10 ClaML zip
+                    # ICD-10 ClaML zip
                     if code_system_exists(fhir_base, "http://hl7.org/fhir/sid/icd-10"):
                         result.ok = True
                         result.message = "already loaded"
                         loaded.add(name); save_state(loaded)
                     else:
-                        log(f"  Converting ICD-10 ClaML from {name}...")
-                        cs = claml_zip_to_fhir(path)
-                        log(f"  Uploading {len(cs['concept'])} ICD-10 concepts to Snowstorm...")
-                        ok, msg = post_code_system(fhir_base, cs)
+                        log(f"  Uploading {name} via hapi-fhir-cli...")
+                        ok, msg = _hapi_cli_upload(path, fhir_base, "http://hl7.org/fhir/sid/icd-10", log)
                         result.ok = ok
                         result.message = msg
                         if ok:
@@ -362,10 +374,8 @@ def load_seeds(snowstorm_url: str, fhir_base: str, log=print) -> dict:
                     result.message = "already loaded"
                     loaded.add(name); save_state(loaded)
                 else:
-                    log(f"  Converting ClaML {name}...")
-                    cs = claml_to_fhir(path)
-                    log(f"  Uploading {len(cs['concept'])} concepts...")
-                    ok, msg = post_code_system(fhir_base, cs)
+                    log(f"  Uploading {name} via hapi-fhir-cli...")
+                    ok, msg = _hapi_cli_upload(path, fhir_base, "http://hl7.org/fhir/sid/icd-10", log)
                     result.ok = ok
                     result.message = msg
                     if ok:

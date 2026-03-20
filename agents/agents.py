@@ -38,33 +38,48 @@ and wrap values in format-specific types.
 
 RULES:
 1. Follow the scenario description — it defines the patient type and clinical focus
-2. Be specific: exact dates (ISO 8601), numeric values with UCUM units, real terminology codes
+2. Be specific: exact dates (ISO 8601), numeric values with UCUM units, clinically realistic terms
 3. Every required path must have a value in its template's field_values
-4. For coded fields use the display term as value (e.g. "Type 2 diabetes mellitus") — the
-   composer will look up and validate the actual code via the terminology server
+4. For coded fields (paths ending in |value or plain text fields for coded concepts):
+   - Set ONLY the |value key with the display term (e.g. "Type 2 diabetes mellitus")
+   - NEVER set |code or |terminology — the composer will look up real codes from the terminology server
+   - Exception: if the field list shows local at-codes (e.g. at0001=...), use those codes directly
 5. For quantity fields use a plain number; put the unit in the companion |unit or |units path
 6. For datetime fields use ISO 8601 (e.g. "2024-03-15T09:30:00+01:00")
 7. Vary the patient — different age, gender, severity, comorbidities each time
 8. Fictional patients only
 
-MULTI-ENTRY (REPEATABLE) FIELDS:
-Some fields have cardinality like "0..n", "1..n", or "0..*" — these can appear multiple times.
-When clinically appropriate, generate MULTIPLE entries by repeating the path with an integer index.
-Example — two diagnoses in one composition:
-  "diagnose[0]/data[at0001]/items[at0002.1]/value|value": "Type 2 diabetes mellitus",
-  "diagnose[0]/data[at0001]/items[at0006]/value|value": "2019-03-01",
-  "diagnose[1]/data[at0001]/items[at0002.1]/value|value": "Arterial hypertension",
-  "diagnose[1]/data[at0001]/items[at0006]/value|value": "2015-06-15"
-Always index ALL sub-paths of a repeated entry with the same integer.
-Fields marked (cardinality: 1..1 or 0..1) must appear at most once — do NOT index them.
+REPEATABLE PATH SEGMENTS:
+In the field list below, path segments marked with :N are repeatable (e.g. pro_laboranalyt:N).
+Replace :N with a zero-based integer index (:0, :1, :2, …) for each entry.
+ALL sub-paths under a repeated segment must share the same index.
+Example — two lab analytes (pro_laboranalyt:N) each with one measurement (messwert:N):
+  "laborbericht/laborbefund/jedes_ereignis/pro_laboranalyt:0/bezeichnung_des_analyts|value": "Troponin I",
+  "laborbericht/laborbefund/jedes_ereignis/pro_laboranalyt:0/messwert:0|magnitude": 0.04,
+  "laborbericht/laborbefund/jedes_ereignis/pro_laboranalyt:0/messwert:0|unit": "ng/mL",
+  "laborbericht/laborbefund/jedes_ereignis/pro_laboranalyt:1/bezeichnung_des_analyts|value": "CRP",
+  "laborbericht/laborbefund/jedes_ereignis/pro_laboranalyt:1/messwert:0|magnitude": 12.5,
+  "laborbericht/laborbefund/jedes_ereignis/pro_laboranalyt:1/messwert:0|unit": "mg/L"
+Rules:
+- Replace every :N with a zero-based integer — use :0 for single entries, :0/:1/:2 for multiple
+- The index goes on the segment marked :N in the path, NEVER after the | suffix
+- Only index segments that appear with :N in the field list below
 
-openEHR RM FIELDS — include these in every openEHR template's field_values:
-  context/start_time         When the clinical encounter started (ISO 8601)
-  context/end_time           When it ended (ISO 8601, optional, omit for outpatient snap)
-  composer/name              Name of the treating/authoring clinician (e.g. "Dr. Maria Schmidt")
-  context/setting|value      Clinical setting: "primary medical care", "secondary medical care",
-                             "home", "other care" — pick what fits the scenario
-  context/health_care_facility|name   Name of the hospital or clinic (make it realistic)
+openEHR RM FIELDS — include these in every openEHR template's field_values.
+Replace {root} with the template root id (e.g. "laborbericht", "kds_diagnose"):
+  {root}/language|code                "de" or "en"
+  {root}/language|terminology         "ISO_639-1"
+  {root}/territory|code               "DE" or appropriate country
+  {root}/territory|terminology        "ISO_3166-1"
+  {root}/composer|name                Name of the treating clinician (e.g. "Dr. Maria Schmidt")
+  {root}/category|code                "433"
+  {root}/category|value               "event"
+  {root}/category|terminology         "openehr"
+  {root}/context/start_time           Encounter start (ISO 8601)
+  {root}/context/setting|code         openehr setting code: 225=home, 232=secondary medical care
+  {root}/context/setting|value        Setting display text
+  {root}/context/setting|terminology  "openehr"
+  {root}/context/_health_care_facility|name   Hospital or clinic name
 
 Output valid JSON with exactly this structure:
 {
@@ -93,14 +108,15 @@ Do not include any text outside the JSON.
 
 
 RESOURCE_COMPOSER_SYSTEM = f"""
-You are an expert in serializing pre-mapped clinical data into valid openEHR compositions
+You are an expert in serializing pre-mapped clinical data into valid openEHR FLAT compositions
 and FHIR R4 resources. You have access to terminology tools to validate and expand coded values.
 
 The patient journey already contains field_values — a dict mapping each template path to a value.
 Your job is to:
 1. Use the terminology tools to look up correct codes for any coded fields (never invent codes)
-2. Wrap each value in the correct format-specific type
-3. Add required structural metadata
+2. Produce a valid EHRbase FLAT JSON — always, regardless of the requested output format
+   (canonical conversion is handled downstream by the SDK)
+3. Add all required RM-level fields
 4. Return ONLY the final JSON — no markdown fences, no explanation
 
 {OPENEHR_RM_KNOWLEDGE}
@@ -109,19 +125,24 @@ Your job is to:
 FORMAT RULES
 ═══════════════════════════════════════════════════════════
 
-For openEHR FLAT JSON:
-- Copy paths and values from field_values directly
-- Add all ctx/* fields described above
-- Coded fields: look up code → set |value, |code, |terminology
-- Quantities: |magnitude (number) and |unit (UCUM: Cel, mm[Hg], kg, cm, /min, g/dL, %)
-- Ordinals: |value (display text) and |code (numeric ordinal 0,1,2…)
+For openEHR FLAT JSON (EHRbase FLAT format):
+- The output is a single flat JSON object — NO nesting, NO "content" array, NO archetype wrappers
+- Copy every key/value from field_values VERBATIM — do not rename or restructure paths
+- Paths are already in EHRbase flat notation: e.g. laborbericht/laborbefund/pro_laboranalyt/messwert|magnitude
+- Repeated entries use :0, :1 index notation: e.g. pro_laboranalyt:0/messwert|magnitude
+- Do NOT generate aqlPath-style paths (with at-codes or archetype IDs in brackets)
 
-For openEHR CANONICAL JSON:
-- Map field_values paths back to the nested RM structure
-- Use DV_CODED_TEXT with defining_code.code_string and terminology_id.value
-- Use DV_QUANTITY with magnitude and units
-- Include archetype_details with template_id and archetype_id
-- Add COMPOSITION-level RM fields (composer, language, territory, category, context)
+MANDATORY CODING RULES — apply to every coded field:
+- For every path ending in |value: you MUST also emit the companion |code and |terminology keys
+- NEVER copy the display text into |code — |code must be a real numeric/alphanumeric code
+- If the web template lists local at-codes (e.g. at0001=...): use those directly (terminology = "local")
+- If the field has a ValueSet URL: call expand_value_set with that URL first
+- Otherwise: use your clinical judgment to choose the right terminology, then call search_terminology
+  with the system URIs most appropriate for the concept. If unsure what systems the server has,
+  call list_code_systems first — it returns every CodeSystem available on the server so you can
+  pick the best fit. You are not limited to SNOMED/LOINC/RxNorm; use whatever the server provides.
+- Set |terminology to the system URI of the code you found
+- Only fall back to free text when the terminology server returns no usable results
 
 For FHIR R4 JSON:
 - Map field_values FHIRPaths to the correct resource structure
@@ -418,7 +439,7 @@ def _format_elements(elements: list[DataElement], slim: bool = False) -> str:
     lines = []
     for el in elements:
         repeatable = el.cardinality not in ("0..1", "1..1", "1")
-        card_str = f"{el.cardinality} *** REPEATABLE — use [0],[1],… indexes ***" if repeatable else el.cardinality
+        card_str = f"{el.cardinality} *** REPEATABLE — use :0,:1,… indexes ***" if repeatable else el.cardinality
         line = f"  - {el.path} [{el.data_type}] ({card_str})"
 
         if el.description:

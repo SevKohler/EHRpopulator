@@ -24,17 +24,18 @@ from models import (
     AllowedCode, InputConstraint, IgContext,
 )
 
-# RM types that are leaf data values (not containers)
-_LEAF_RM_TYPES = {
-    "DV_TEXT", "DV_CODED_TEXT", "DV_QUANTITY", "DV_COUNT",
-    "DV_BOOLEAN", "DV_DATE", "DV_DATE_TIME", "DV_TIME",
-    "DV_DURATION", "DV_IDENTIFIER", "DV_URI", "DV_MULTIMEDIA",
-    "DV_PROPORTION", "DV_ORDINAL", "DV_SCALE", "CODE_PHRASE",
-    "STRING", "BOOLEAN", "INTEGER", "REAL",
+# Internal RM child node ids to skip entirely (metadata, not clinical data)
+_SKIP_CHILD_IDS = {
+    "name", "null_flavour", "feeder_audit", "archetype_details",
+    "archetype_node_id", "uid", "links", "defining_code",
+    "encoding", "language", "territory",
 }
 
-# RM types to skip entirely (internal structural nodes, not data)
-_SKIP_RM_TYPES = {"HISTORY", "ITEM_TREE", "ITEM_LIST", "ITEM_SINGLE", "ISM_TRANSITION"}
+# RM types that are transparent structural containers — recurse through them
+# but do NOT add their id to the flat path
+_TRANSPARENT_RM_TYPES = {
+    "HISTORY", "ITEM_TREE", "ITEM_LIST", "ITEM_SINGLE", "ITEM_TABLE", "ISM_TRANSITION",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -72,11 +73,23 @@ def parse_web_template(json_str: str) -> TemplateAnalysis:
 
     _walk_node(tree, "", default_lang, required_elements, optional_elements)
 
+    # Deduplicate by path (choice types can emit the same path from multiple DV_* children)
+    seen: set[str] = set()
+    def _dedup(elements: list[DataElement]) -> list[DataElement]:
+        result = []
+        for el in elements:
+            if el.path not in seen:
+                seen.add(el.path)
+                result.append(el)
+        return result
+    required_elements = _dedup(required_elements)
+    optional_elements = _dedup(optional_elements)
+
     # Collect unique clinical concepts from top-level section names
     clinical_concepts = [
         _localized(child, "localizedNames", default_lang) or child.get("id", "")
         for child in tree.get("children", [])
-        if child.get("rmType") not in _SKIP_RM_TYPES
+        if child.get("id") not in _SKIP_CHILD_IDS
     ]
 
     return TemplateAnalysis(
@@ -98,35 +111,66 @@ def _walk_node(
     required: list[DataElement],
     optional: list[DataElement],
 ) -> None:
-    rm_type = node.get("rmType", "")
     node_id = node.get("id", "")
-    aql_path = node.get("aqlPath", "")
+    rm_type = node.get("rmType", "")
     min_occ = node.get("min", 0)
-    max_occ = node.get("max", 1)   # -1 means unbounded
+    max_occ = node.get("max", 1)  # -1 means unbounded
 
-    if rm_type in _SKIP_RM_TYPES:
-        # Recurse into children but don't emit this node itself
+    # Skip internal RM metadata nodes entirely
+    if node_id in _SKIP_CHILD_IDS:
+        return
+
+    # Transparent containers — recurse without adding their id to the path
+    if rm_type in _TRANSPARENT_RM_TYPES:
         for child in node.get("children", []):
             _walk_node(child, parent_path, lang, required, optional)
         return
 
-    if rm_type in _LEAF_RM_TYPES:
-        # This is a data value node — emit it
-        element = _build_element(node, aql_path or parent_path, lang, min_occ, max_occ)
-        if min_occ >= 1:
-            required.append(element)
-        else:
-            optional.append(element)
+    # Build flat path — repeatable nodes get :N suffix so the LLM knows where to put the index
+    repeatable = max_occ == -1 or max_occ > 1
+    segment = f"{node_id}:N" if repeatable else node_id
+    flat_path = f"{parent_path}/{segment}" if parent_path and segment else (segment or parent_path)
+
+    if rm_type == "ELEMENT":
+        # ELEMENT wraps one or more typed value children (DV_TEXT, DV_QUANTITY, etc.)
+        # Child named "value"        → standard case: path is element_path|suffix
+        # Child named anything else  → choice/named case: path is element_path/child_id|suffix
+        #   e.g. quantity_value → messwert/quantity_value|magnitude
+        #        date_time_value → collection_date_time/date_time_value (no suffix)
+        dv_children = [
+            c for c in node.get("children", [])
+            if c.get("id") not in _SKIP_CHILD_IDS
+            and (c.get("rmType", "").startswith("DV_") or c.get("rmType") in (
+                "CODE_PHRASE", "STRING", "BOOLEAN", "INTEGER", "REAL"
+            ))
+        ]
+        if not dv_children:
+            dv_children = [node]
+        for child in dv_children:
+            child_id = child.get("id", "")
+            child_path = flat_path if child_id == "value" else f"{flat_path}/{child_id}" if child_id else flat_path
+            elements = _build_elements(child, child_path, lang, min_occ, max_occ)
+            for el in elements:
+                (required if min_occ >= 1 else optional).append(el)
         return
 
-    # Structural node (OBSERVATION, CLUSTER, ELEMENT, EVENT, etc.)
-    # Recurse into children; use aqlPath as the running path
-    current_path = aql_path or parent_path
+    # Structural node — recurse into children, carrying the flat path forward
     for child in node.get("children", []):
-        _walk_node(child, current_path, lang, required, optional)
+        _walk_node(child, flat_path, lang, required, optional)
 
 
-def _build_element(node: dict, path: str, lang: str, min_occ: int, max_occ: int) -> DataElement:
+def _build_elements(node: dict, path: str, lang: str, min_occ: int, max_occ: int) -> list[DataElement]:
+    """Emit one DataElement per input suffix (|value, |code, |magnitude, etc.).
+    If no suffix is defined (e.g. plain DV_TEXT), emit a single element without suffix.
+    """
+    inputs = node.get("inputs", [])
+    suffixes = [inp.get("suffix") for inp in inputs if inp.get("suffix")]
+    if not suffixes:
+        return [_build_element(node, path, lang, min_occ, max_occ, suffix="")]
+    return [_build_element(node, path, lang, min_occ, max_occ, suffix=s) for s in suffixes]
+
+
+def _build_element(node: dict, path: str, lang: str, min_occ: int, max_occ: int, suffix: str = "") -> DataElement:
     rm_type = node.get("rmType", "UNKNOWN")
     name = _localized(node, "localizedNames", lang) or node.get("id", path.split("/")[-1])
     description = _localized(node, "localizedDescriptions", lang) or ""
@@ -136,11 +180,13 @@ def _build_element(node: dict, path: str, lang: str, min_occ: int, max_occ: int)
     value_set_url: str | None = None
     terminology: str | None = None
 
-    for inp in node.get("inputs", []):
-        suffix = inp.get("suffix", "")
+    # Only process the input matching this suffix (or all if no suffix)
+    all_inputs = node.get("inputs", [])
+    matching = [inp for inp in all_inputs if inp.get("suffix", "") == suffix] if suffix else all_inputs
+
+    for inp in matching:
         inp_type = inp.get("type", "")
 
-        # Inline code list (local value set — no server lookup needed)
         code_list = inp.get("list", [])
         if code_list:
             allowed_codes = [
@@ -152,14 +198,11 @@ def _build_element(node: dict, path: str, lang: str, min_occ: int, max_occ: int)
                 for item in code_list
             ]
 
-        # External terminology binding
         if inp.get("terminology"):
             terminology = inp["terminology"]
         if inp.get("listOpen") is False and not code_list:
-            # Bound to external value set
             value_set_url = inp.get("defaultValue")
 
-        # Numeric range constraints
         validation = inp.get("validation", {})
         range_constraint = validation.get("range", {})
         if range_constraint or inp_type == "DECIMAL":
@@ -169,23 +212,24 @@ def _build_element(node: dict, path: str, lang: str, min_occ: int, max_occ: int)
                 min=range_constraint.get("min"),
                 max=range_constraint.get("max"),
             )
-            # Allowed units come from the companion "unit" input
             constraints.append(ic)
 
-    # Collect allowed units from any "unit" suffix input
-    for inp in node.get("inputs", []):
-        if inp.get("suffix") == "unit" and inp.get("list"):
-            for c in constraints:
-                if c.suffix == "magnitude":
-                    c.allowed_units = [
-                        AllowedCode(value=u["value"], label=u.get("label", u["value"]))
-                        for u in inp["list"]
-                    ]
+    # Attach allowed units to magnitude constraint
+    if suffix == "magnitude":
+        for inp in all_inputs:
+            if inp.get("suffix") == "unit" and inp.get("list"):
+                for c in constraints:
+                    if c.suffix == "magnitude":
+                        c.allowed_units = [
+                            AllowedCode(value=u["value"], label=u.get("label", u["value"]))
+                            for u in inp["list"]
+                        ]
 
     cardinality = f"{min_occ}..{'*' if max_occ == -1 else max_occ}"
+    flat_path = f"{path}|{suffix}" if suffix else path
 
     return DataElement(
-        path=path,
+        path=flat_path,
         name=name,
         data_type=rm_type,
         required=min_occ >= 1,

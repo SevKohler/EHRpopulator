@@ -77,6 +77,66 @@ class TerminologyTools:
         }
         return self._get("/ValueSet/$expand", params)
 
+    def list_code_systems(self) -> str:
+        """
+        List all CodeSystems available on the terminology server.
+        Returns a JSON array of {url, name, version} for each system.
+        Call this first if you are unsure which terminologies the server supports,
+        then pick the most appropriate system for your coded field.
+        """
+        raw = self._get("/CodeSystem", {"_summary": "true", "_count": "100"})
+        try:
+            data = json.loads(raw)
+            systems = []
+            for entry in data.get("entry", []):
+                res = entry.get("resource", {})
+                systems.append({
+                    "url": res.get("url", ""),
+                    "name": res.get("name") or res.get("title", ""),
+                    "version": res.get("version", ""),
+                })
+            return json.dumps({"code_systems": systems})
+        except Exception as e:
+            return json.dumps({"error": str(e), "raw": raw[:500]})
+
+    def search_terminology(self, description: str, systems: list[str] | None = None) -> str:
+        """
+        Search one or more terminologies for a clinical concept and return the best matches.
+
+        systems: list of system URIs to search. Supported:
+          "http://snomed.info/sct"   — SNOMED CT (diagnoses, findings, procedures, specimens, body sites)
+          "http://loinc.org"         — LOINC (lab tests, vital signs, clinical observations)
+          "http://www.nlm.nih.gov/research/umls/rxnorm" — RxNorm (medications)
+        If omitted, searches SNOMED and LOINC.
+
+        Returns JSON with matches from each system searched.
+        """
+        if not systems:
+            systems = ["http://snomed.info/sct", "http://loinc.org"]
+
+        system_to_vs = {
+            "http://snomed.info/sct": "http://snomed.info/sct?fhir_vs",
+            "http://loinc.org": "http://loinc.org/vs",
+            "http://www.nlm.nih.gov/research/umls/rxnorm": "http://www.nlm.nih.gov/research/umls/rxnorm/vs",
+        }
+
+        results: dict[str, list] = {"matches": []}
+        for system in systems:
+            vs_url = system_to_vs.get(system, system)
+            raw = self._get("/ValueSet/$expand", {"url": vs_url, "filter": description, "count": "5"})
+            try:
+                data = json.loads(raw)
+                for entry in data.get("expansion", {}).get("contains", []):
+                    results["matches"].append({
+                        "code": entry.get("code"),
+                        "display": entry.get("display"),
+                        "system": entry.get("system", system),
+                    })
+            except Exception:
+                pass
+
+        return json.dumps(results)
+
     def validate_code(self, system: str, code: str, value_set_url: str) -> str:
         """
         Validate whether a code is valid in a given ValueSet.
@@ -165,6 +225,49 @@ class TerminologyTools:
                 },
             },
             {
+                "name": "list_code_systems",
+                "description": (
+                    "List all CodeSystems available on the terminology server. "
+                    "Call this when you need to discover which terminologies are loaded "
+                    "(e.g. SNOMED, LOINC, ICD-10, RxNorm, ATC, local systems). "
+                    "Returns url, name, and version for each system."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            },
+            {
+                "name": "search_terminology",
+                "description": (
+                    "Search one or more terminologies for a clinical concept. "
+                    "Pass the system URIs you want to search — pick based on clinical context. "
+                    "SNOMED: diagnoses, findings, procedures, specimens, body sites. "
+                    "LOINC: lab tests, vital signs, observations. "
+                    "RxNorm: medications. "
+                    "Omit systems to search SNOMED + LOINC. "
+                    "Returns matching codes with display and system URI."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "description": {"type": "string", "description": "Clinical concept to search for"},
+                        "systems": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Terminology system URIs to search, e.g. "
+                                "[\"http://snomed.info/sct\"], "
+                                "[\"http://loinc.org\"], "
+                                "[\"http://www.nlm.nih.gov/research/umls/rxnorm\"]"
+                            ),
+                        },
+                    },
+                    "required": ["description"],
+                },
+            },
+            {
                 "name": "validate_code",
                 "description": "Validate whether a code is valid in a given ValueSet.",
                 "input_schema": {
@@ -197,10 +300,12 @@ class TerminologyTools:
 
     def get_handler(self, name: str):
         return {
+            "list_code_systems": self.list_code_systems,
             "expand_value_set": self.expand_value_set,
             "lookup_code": self.lookup_code,
             "search_snomed": self.search_snomed,
             "search_loinc": self.search_loinc,
+            "search_terminology": self.search_terminology,
             "validate_code": self.validate_code,
             "snomed_ecl": self.snomed_ecl,
         }.get(name)

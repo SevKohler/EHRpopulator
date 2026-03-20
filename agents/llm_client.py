@@ -22,10 +22,10 @@ def build_llm(config: dict) -> Callable:
 
     if provider == "anthropic":
         return _anthropic_client(config)
-    elif provider in ("openai", "azure"):
+    elif provider in ("openai", "azure", "custom"):
         return _openai_client(config)
     else:
-        raise ValueError(f"Unknown LLM provider: {provider}. Supported: anthropic, openai, azure")
+        raise ValueError(f"Unknown LLM provider: {provider}. Supported: anthropic, openai, azure, custom")
 
 
 def _anthropic_client(config: dict) -> Callable:
@@ -101,7 +101,16 @@ def _anthropic_client(config: dict) -> Callable:
 def _openai_client(config: dict) -> Callable:
     provider = config.get("provider", "openai").lower()
 
-    if provider == "azure":
+    if provider == "custom":
+        api_key = config.get("api_key") or os.environ.get("LLM_API_KEY", "none")
+        base_url = config.get("base_url")
+        if not base_url:
+            raise ValueError("base_url is required for provider 'custom'")
+        client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        model = config.get("model")
+        if not model:
+            raise ValueError("model is required for provider 'custom'")
+    elif provider == "azure":
         api_key = config.get("api_key") or os.environ.get("AZURE_OPENAI_KEY")
         client = openai.AzureOpenAI(
             api_key=api_key,
@@ -111,7 +120,8 @@ def _openai_client(config: dict) -> Callable:
         model = config.get("deployment") or config.get("model")
     else:
         api_key = config.get("api_key") or os.environ.get("OPENAI_API_KEY")
-        client = openai.OpenAI(api_key=api_key)
+        base_url = config.get("base_url") or None
+        client = openai.OpenAI(api_key=api_key, base_url=base_url)
         model = config.get("model", "gpt-4o")
 
     max_tokens = config.get("max_tokens", 8192)

@@ -119,15 +119,24 @@ ISM NOTE: careflow_step terminology = "local"  (at-code from the archetype, e.g.
 
     sections.append("""
 ─────────────────────────────────────────────────
-FLAT JSON ctx shortcuts (for openEHR flat format only):
-  ctx/template_id              template ID string
-  ctx/language                 ISO 639-1 (e.g. "en", "de")
-  ctx/territory                ISO 3166-1 alpha-2 (e.g. "DE", "US")
-  ctx/time                     authoring time (ISO 8601)
-  ctx/composer_name            authoring clinician name
-  ctx/health_care_facility_name  facility name
-  ctx/id_scheme                "local"
-  ctx/id_namespace             "local"
+EHRBASE FLAT FORMAT — REQUIRED RM-LEVEL FIELDS
+These fields MUST appear in every composition, prefixed with the template root id.
+Replace {root} with the template root id (e.g. "laborbericht", "kds_diagnose").
+
+  {root}/language|code               ISO 639-1 code (e.g. "de", "en")
+  {root}/language|terminology        "ISO_639-1"
+  {root}/territory|code              ISO 3166-1 alpha-2 (e.g. "DE", "US")
+  {root}/territory|terminology       "ISO_3166-1"
+  {root}/composer|name               name of the authoring clinician
+  {root}/category|code               "433" for event compositions
+  {root}/category|value              "event"
+  {root}/category|terminology        "openehr"
+  {root}/context/start_time         encounter start (ISO 8601)
+  {root}/context/setting|code        openehr setting code (e.g. 225=home, 232=secondary care)
+  {root}/context/setting|value       setting display text
+  {root}/context/setting|terminology "openehr"
+  {root}/context/_health_care_facility|name   facility name (underscore prefix = optional RM field)
+  {root}/context/_end_time           encounter end time (ISO 8601, optional)
 """)
 
     return "\n".join(sections)
