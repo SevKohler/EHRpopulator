@@ -127,6 +127,7 @@ def _openai_client(config: dict) -> Callable:
     max_tokens = config.get("max_tokens", 32768)
     context_window = config.get("context_window", 32768)
     temperature = config.get("temperature", 0.7)
+    tool_format = config.get("tool_format", "auto")
 
     def call(system: str, user: str, tools: list[dict] | None = None, handlers: dict | None = None) -> str:
         messages = [
@@ -168,17 +169,31 @@ def _openai_client(config: dict) -> Callable:
 
             if choice.finish_reason == "stop":
                 content = choice.message.content
-                if content and content.strip():
-                    return content
-                # Model finished tool calls but returned no text — ask explicitly for the JSON
-                if tool_calls_made:
-                    kwargs["messages"].append({"role": "assistant", "content": ""})
-                    kwargs["messages"].append({"role": "user", "content": "Now output the final JSON."})
+                if not content or not content.strip():
+                    if tool_calls_made:
+                        kwargs["messages"].append({"role": "assistant", "content": ""})
+                        kwargs["messages"].append({"role": "user", "content": "Now output the final JSON."})
+                        kwargs.pop("tools", None)
+                        kwargs.pop("tool_choice", None)
+                        final = client.chat.completions.create(**kwargs)
+                        return final.choices[0].message.content or ""
+                    return ""
+
+                # Detect model-native tool call format
+                # Some models output tool calls as text instead of using the API tool_calls mechanism
+                native_calls = _parse_native_tool_calls(content, tool_format)
+                if native_calls and handlers:
+                    tool_calls_made = True
+                    kwargs["messages"].append({"role": "assistant", "content": content})
+                    for name, args in native_calls:
+                        result = _dispatch_tool(name, args, handlers)
+                        kwargs["messages"].append({"role": "user", "content": f"Tool result for {name}: {result}"})
+                    # Remove API-level tools to avoid conflicting with native format
                     kwargs.pop("tools", None)
                     kwargs.pop("tool_choice", None)
-                    final = client.chat.completions.create(**kwargs)
-                    return final.choices[0].message.content or ""
-                return ""
+                    continue
+
+                return content
 
             if choice.finish_reason == "tool_calls" and tools:
                 tool_calls_made = True
@@ -202,6 +217,82 @@ def _openai_client(config: dict) -> Callable:
                 )
 
     return call
+
+
+def _parse_native_tool_calls(content: str, fmt: str = "auto") -> list[tuple[str, dict]]:
+    """Parse model-native text-based tool call formats.
+
+    fmt options:
+      auto     — try all parsers in order (default)
+      openai   — standard API tool_calls, no text parsing needed
+      gpt-oss  — <|start|>...<|call|>  (gpt-oss-120b, some BIH/de.NBI models)
+      llama    — <|python_tag|>func({...})<|eom_id|>  (Llama 3.1+)
+      mistral  — [TOOL_CALLS] [{"name":...,"arguments":{...}}]  (Mistral/Mixtral)
+      qwen     — ✿FUNCTION✿: name\\n✿ARGS✿: {...}  (Qwen series)
+      deepseek — <|tool_calls_begin|>...<|tool_call_end|>  (DeepSeek)
+    """
+    import re, json
+
+    def _try_parse(text: str) -> list[tuple[str, dict]]:
+        calls = []
+
+        # gpt-oss: <|start|>...<|channel|>...functions.NAME...<|message|>{...}<|call|>
+        for m in re.finditer(
+            r'<\|start\|>.*?functions\.(\w+)[^<]*<\|message\|>(.*?)<\|call\|>',
+            text, re.DOTALL
+        ):
+            try:
+                calls.append((m.group(1), json.loads(m.group(2).strip())))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # llama 3.1: <|python_tag|>func_name({"key": "val"})<|eom_id|>
+        for m in re.finditer(
+            r'<\|python_tag\|>(\w+)\((.*?)\)<\|eom_id\|>',
+            text, re.DOTALL
+        ):
+            try:
+                calls.append((m.group(1), json.loads(m.group(2).strip())))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # mistral: [TOOL_CALLS] [{"name": "...", "arguments": {...}}]
+        for m in re.finditer(
+            r'\[TOOL_CALLS\]\s*\[(.*?)\]',
+            text, re.DOTALL
+        ):
+            try:
+                for tc in json.loads(f'[{m.group(1)}]'):
+                    calls.append((tc["name"], tc.get("arguments", {})))
+            except (json.JSONDecodeError, ValueError, KeyError):
+                pass
+
+        # qwen: ✿FUNCTION✿: name\n✿ARGS✿: {...}
+        for m in re.finditer(
+            r'✿FUNCTION✿:\s*(\w+)\s*\n✿ARGS✿:\s*(\{.*?\})',
+            text, re.DOTALL
+        ):
+            try:
+                calls.append((m.group(1), json.loads(m.group(2).strip())))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # deepseek: <|tool_calls_begin|>...<|tool_call_begin|>{"name":...}<|tool_call_end|>
+        for m in re.finditer(
+            r'<\|tool_call_begin\|>(.*?)<\|tool_call_end\|>',
+            text, re.DOTALL
+        ):
+            try:
+                tc = json.loads(m.group(1).strip())
+                calls.append((tc["name"], tc.get("parameters", tc.get("arguments", {}))))
+            except (json.JSONDecodeError, ValueError, KeyError):
+                pass
+
+        return calls
+
+    if fmt in ("openai", None):
+        return []
+    return _try_parse(content)
 
 
 def _dispatch_tool(name: str, inputs: dict, handlers: dict) -> str:

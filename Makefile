@@ -7,11 +7,13 @@ setup:
 
 # Start interactive generation
 popu:
+	rm -rf output
 	cd agents && .venv/bin/python main.py run $(ARGS)
 
 # Non-interactive generation
 # Example: make generate ARGS="templates/openehr/vitals.opt --scenario 'COPD patients' --count 5"
 generate:
+	rm -rf output
 	cd agents && .venv/bin/python main.py generate $(ARGS)
 
 # Inspect a template's structure

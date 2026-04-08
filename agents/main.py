@@ -81,12 +81,18 @@ def load_config(config_path: Path | None) -> dict:
 
 
 def _resolve_env(obj):
-    """Recursively resolve ${VAR} placeholders in config values."""
+    """Recursively resolve ${VAR} and ${VAR:default} placeholders in config values."""
     import re
+    def _sub(m):
+        var, default = m.group(1), m.group(2)
+        val = os.environ.get(var)
+        if val is not None:
+            return val
+        if default is not None:
+            return default
+        raise ValueError(f"Required environment variable ${{{var}}} is not set. Add it to agents/.env")
     if isinstance(obj, str):
-        return re.sub(r"\$\{(\w+)(?::([^}]*))?\}",
-                      lambda m: os.environ.get(m.group(1), m.group(2) or m.group(0)),
-                      obj)
+        return re.sub(r"\$\{(\w+)(?::([^}]*))?\}", _sub, obj)
     elif isinstance(obj, dict):
         return {k: _resolve_env(v) for k, v in obj.items()}
     elif isinstance(obj, list):

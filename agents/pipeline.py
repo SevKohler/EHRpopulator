@@ -37,7 +37,7 @@ from models import (
     PatientJourney, GeneratedResource, ValidationResult, ValidationIssue,
 )
 from template_parser import parse_web_template, parse_structure_definition
-from agents import TemplateAnalyzerAgent, JourneyGeneratorAgent, ResourceComposerAgent, _compose_thread_local
+from agents import TemplateAnalyzerAgent, JourneyGeneratorAgent, ResourceComposerAgent, TerminologyResolverAgent, _compose_thread_local
 from tools import TerminologyTools, EHRbaseTools
 from llm_client import build_llm
 
@@ -88,6 +88,7 @@ class Pipeline:
 
         self.template_analyzer = TemplateAnalyzerAgent(llm)
         self.journey_generator = JourneyGeneratorAgent(llm)
+        self.resolver = TerminologyResolverAgent(llm, self.terminology)
         self.composer = ResourceComposerAgent(llm, self.terminology, self.ehrbase)
 
     # ------------------------------------------------------------------
@@ -157,7 +158,6 @@ class Pipeline:
         analyses = [a for a, _, _ in template_infos]
 
         results: list[GeneratedResource] = []
-        total = count * len(analyses)
         lock = threading.Lock()
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -215,6 +215,9 @@ class Pipeline:
                 expand=False,
             ))
 
+            log("[bold]Resolving terminology codes...[/bold]")
+            journey = self.resolver.resolve(journey, analyses, log_fn=log)
+
             patient_dir = self.output_dir / journey.patient_id
             patient_dir.mkdir(parents=True, exist_ok=True)
             (patient_dir / "journey.json").write_text(
@@ -223,24 +226,38 @@ class Pipeline:
 
             def compose_template(args):
                 j, analysis, opt_xml, struct_def = args
+                entries = journey.compositions.get(analysis.template_id, [{}])
+                if not entries:
+                    entries = [{}]
+                multi = len(entries) > 1
                 log(f"\n[bold]Template {j+1}/{len(template_infos)}:[/bold] "
-                    f"[cyan]{escape(analysis.name)}[/cyan]")
-                with self._llm_semaphore:
-                    resource = self._compose_with_validation(
-                        journey, analysis, format, opt_xml, struct_def, log
-                    )
-                with lock:
-                    self._save(resource, i)
-                if upload:
-                    self._upload(resource)
-                return resource
+                    f"[cyan]{escape(analysis.name)}[/cyan]"
+                    + (f"  ([dim]{len(entries)} encounters[/dim])" if multi else ""))
+
+                resources = []
+                for entry_idx, field_values in enumerate(entries):
+                    if multi:
+                        log(f"  [dim]Encounter {entry_idx+1}/{len(entries)}[/dim]")
+                    with self._llm_semaphore:
+                        resource = self._compose_with_validation(
+                            journey, analysis, format, opt_xml, struct_def, log,
+                            field_values=field_values,
+                        )
+                    entry_index = entry_idx if multi else None
+                    with lock:
+                        self._save(resource, i, entry_index=entry_index)
+                    if upload:
+                        self._upload(resource)
+                    resources.append(resource)
+                return resources
 
             with ThreadPoolExecutor(max_workers=len(template_infos)) as template_executor:
-                patient_resources = list(template_executor.map(
+                nested = list(template_executor.map(
                     compose_template,
                     [(j, analysis, opt_xml, struct_def)
                      for j, (analysis, opt_xml, struct_def) in enumerate(template_infos)],
                 ))
+                patient_resources = [r for group in nested for r in group]
             return patient_resources
 
         with Live(_get_renderable(), console=console, refresh_per_second=4) as live:
@@ -262,7 +279,7 @@ class Pipeline:
                     live.update(_get_renderable())
 
         valid_count = sum(1 for r in results if r.valid)
-        console.print(f"\n[bold]Done.[/bold] {valid_count}/{total} compositions valid. "
+        console.print(f"\n[bold]Done.[/bold] {valid_count}/{len(results)} compositions valid. "
                       f"Output: {self.output_dir}")
         return results
 
@@ -278,6 +295,7 @@ class Pipeline:
         opt_xml: str | None,
         structure_def_json: str | None,
         log_fn: Callable[[str], None] | None = None,
+        field_values: dict | None = None,
     ) -> GeneratedResource:
 
         if log_fn is None:
@@ -297,11 +315,15 @@ class Pipeline:
         for attempt in range(1, self.max_retries + 1):
             log_fn(f"  [dim]Attempt {attempt}/{self.max_retries} — composing...[/dim]")
 
-            raw = self.composer.compose(journey, analysis, compose_format.value, validation_errors)
+            raw = self.composer.compose(
+                journey, analysis, compose_format.value, validation_errors,
+                field_values=field_values,
+            )
             raw = _strip_markdown(raw)
-            if not raw.strip():
-                log_fn(f"  [red]LLM returned empty response on attempt {attempt}[/red]")
-                validation_errors = "Your previous response was empty. You MUST return a non-empty JSON object."
+            if not raw.strip() or raw.lstrip().startswith("<|"):
+                log_fn(f"  [red]LLM returned unusable response on attempt {attempt}[/red]")
+                log_fn(f"  [dim]Leaked content: {raw[:200]}[/dim]")
+                validation_errors = "Your previous response was empty or contained tool-call markup instead of JSON. You MUST return a valid JSON object only."
                 continue
 
             # Convert flat → canonical via the SDK if canonical output was requested
@@ -528,11 +550,12 @@ class Pipeline:
     # Save output
     # ------------------------------------------------------------------
 
-    def _save(self, resource: GeneratedResource, index: int) -> None:
-        # Valid → output/{patient_id}/flat_{template_id}.json
-        # Failed → output/errors/{patient_id}/flat_{template_id}.json + .errors.json
+    def _save(self, resource: GeneratedResource, index: int, entry_index: int | None = None) -> None:
+        # Valid → output/{patient_id}/flat_{template_id}[_{n}].json
+        # Failed → output/errors/{patient_id}/flat_{template_id}[_{n}].json + .errors.json
         template_slug = re.sub(r"[^\w\-]", "_", resource.template_id)
-        filename = f"flat_{template_slug}.json"
+        suffix = f"_{entry_index + 1}" if entry_index is not None else ""
+        filename = f"flat_{template_slug}{suffix}.json"
 
         if resource.valid:
             out_dir = self.output_dir / resource.patient_id

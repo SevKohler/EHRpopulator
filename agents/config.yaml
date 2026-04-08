@@ -2,10 +2,19 @@
 # Copy to config.local.yaml and fill in secrets, or use environment variables.
 
 llm:
-  provider: ${LLM_PROVIDER:anthropic}   # anthropic | openai | azure | custom
-  model: ${LLM_MODEL:claude-opus-4-5}
-  api_key: ${LLM_API_KEY:}             # or ANTHROPIC_API_KEY / OPENAI_API_KEY
-  base_url: ${LLM_BASE_URL:}           # for self-hosted OpenAI-compatible servers
+  provider: ${LLM_PROVIDER}             # anthropic | openai | azure | custom
+  model: ${LLM_MODEL}                   # set in .env
+  api_key: ${LLM_API_KEY}              # or ANTHROPIC_API_KEY / OPENAI_API_KEY
+  base_url: ${LLM_BASE_URL}            # for self-hosted OpenAI-compatible servers
+  # tool_format controls how tool calls are parsed for OpenAI-compatible providers.
+  # auto    — detect automatically (tries all known formats, recommended)
+  # openai  — standard API tool_calls only, no text parsing
+  # gpt-oss — <|start|>...<|call|>  (gpt-oss-120b, de.NBI/BIH)
+  # llama   — <|python_tag|>...     (Llama 3.1+)
+  # mistral — [TOOL_CALLS] [...]    (Mistral/Mixtral)
+  # qwen    — ✿FUNCTION✿: ...      (Qwen series)
+  # deepseek — <|tool_calls_begin|> (DeepSeek)
+  tool_format: auto
   temperature: 0.3
   # context_window: total token budget of the model (input + output). Default 32768.
   # Set to the actual value for your model to avoid silent empty responses.
@@ -59,5 +68,5 @@ pipeline:
   max_retries: 5             # Max validation retry attempts per composition
   output_dir: "../output"    # Where to write generated files
   save_intermediate: true    # Save after each successful generation
-  workers: 4                 # Parallel patients (increase for higher throughput)
-  max_llm_concurrency: 4     # Max concurrent LLM calls across all patients+templates
+  workers: 10                # Parallel patients (increase for higher throughput)
+  max_llm_concurrency: 8     # Max concurrent LLM calls across all patients+templates

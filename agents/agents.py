@@ -38,6 +38,8 @@ from template_parser import parse_web_template, parse_structure_definition
 from tools import TerminologyTools, EHRbaseTools
 from knowledge_openehr import OPENEHR_RM_KNOWLEDGE
 
+_INDEX_RE = re.compile(r':\d+')
+
 
 # ---------------------------------------------------------------------------
 # System prompts (journey generation + composition only — no template parsing)
@@ -64,6 +66,18 @@ RULES:
 6. For datetime fields use ISO 8601 (e.g. "2024-03-15T09:30:00+01:00")
 7. Vary the patient — different age, gender, severity, comorbidities each time
 8. Fictional patients only
+9. Each template's compositions entry is a LIST of clinical sessions (even if only one).
+   - Each element in the list = one COMPOSITION = one distinct clinical act/session
+   - A new composition is needed whenever a clinically separate event occurs for
+     that template type — even on the same day. Examples:
+       • Sodium measured on admission → laborbericht composition 1
+       • HbA1c ordered separately later that day → laborbericht composition 2
+       • A diagnosis documented → diagnose composition (different template, separate list)
+   - Within a single session, use repeatable path indexes (:0, :1, …) for multiple
+     results reported together in one order (e.g. a full metabolic panel: sodium,
+     potassium, creatinine all in one laborbericht with pro_laboranalyt:0/:1/:2)
+   - The narrative drives this: each distinct clinical event described in the
+     narrative should map to its own composition entry
 
 REPEATABLE PATH SEGMENTS:
 In the field list below, path segments marked with :N are repeatable (e.g. pro_laboranalyt:N).
@@ -104,17 +118,26 @@ Output valid JSON with exactly this structure:
   "gender": "female",
   "narrative": "A detailed clinical narrative (3-5 paragraphs) telling the patient's story chronologically: presenting complaint, history, clinical course, relevant findings, treatments, and outcome. Write as a physician would document it — specific, clinically realistic, and consistent with all compositions below.",
   "compositions": {
-    "<template_id>": {
-      "context/start_time": "2024-03-15T09:30:00+01:00",
-      "path/to/field|magnitude": 38.5,
-      "path/to/field|unit": "Cel",
-      "path/to/coded_field|value": "Hypertension",
-      "path/to/coded_field|terminology": "SNOMED-CT"
-    },
-    "<another_template_id>": {
-      "context/start_time": "2024-03-15T09:30:00+01:00",
-      "path/to/other_field": "value"
-    }
+    "<template_id>": [
+      {
+        "context/start_time": "2024-03-15T09:30:00+01:00",
+        "path/to/field|magnitude": 38.5,
+        "path/to/field|unit": "Cel",
+        "path/to/coded_field|value": "Hypertension"
+      },
+      {
+        "context/start_time": "2024-03-22T14:15:00+01:00",
+        "path/to/field|magnitude": 37.2,
+        "path/to/field|unit": "Cel",
+        "path/to/coded_field|value": "Hypertension"
+      }
+    ],
+    "<another_template_id>": [
+      {
+        "context/start_time": "2024-03-15T09:30:00+01:00",
+        "path/to/other_field": "value"
+      }
+    ]
   }
 }
 
@@ -125,11 +148,12 @@ Do not include any text outside the JSON.
 
 RESOURCE_COMPOSER_SYSTEM = f"""
 You are an expert in serializing pre-mapped clinical data into valid openEHR FLAT compositions
-and FHIR R4 resources. You have access to terminology tools to validate and expand coded values.
+and FHIR R4 resources.
 
 The patient journey already contains field_values — a dict mapping each template path to a value.
+All coded fields have already been resolved: |code and |terminology keys are pre-filled.
 Your job is to:
-1. Use the terminology tools to look up correct codes for any coded fields (never invent codes)
+1. Copy ALL field_values verbatim into the output JSON — codes are pre-resolved, do not change them
 2. Produce a valid EHRbase FLAT JSON — always, regardless of the requested output format
    (canonical conversion is handled downstream by the SDK)
 3. Add all required RM-level fields
@@ -158,16 +182,10 @@ MANDATORY — A valid composition MUST include ALL of the following:
    Omitting clinical content is the most common error — always include every path from field_values.
 
 MANDATORY CODING RULES — apply to every coded field:
-- For every path ending in |value: you MUST also emit the companion |code and |terminology keys
-- NEVER copy the display text into |code — |code must be a real numeric/alphanumeric code
-- If the web template lists local at-codes (e.g. at0001=...): use those directly (terminology = "local")
-- If the field has a ValueSet URL: call expand_value_set with that URL first
-- Otherwise: use your clinical judgment to choose the right terminology, then call search_terminology
-  with the system URIs most appropriate for the concept. If unsure what systems the server has,
-  call list_code_systems first — it returns every CodeSystem available on the server so you can
-  pick the best fit. You are not limited to SNOMED/LOINC/RxNorm; use whatever the server provides.
-- Set |terminology to the system URI of the code you found
-- Only fall back to free text when the terminology server returns no usable results
+- ALL |code and |terminology keys are PRE-RESOLVED — copy them verbatim from field_values
+- NEVER change or invent codes — if |code is present in field_values, use it exactly as-is
+- For every path ending in |value: the companion |code and |terminology are already in field_values
+- If a |code key is missing from field_values (resolver gap): leave |code empty rather than inventing
 
 For FHIR R4 JSON:
 - Map field_values FHIRPaths to the correct resource structure
@@ -269,12 +287,17 @@ Generate patient data for patient #{patient_index + 1}.
 SCENARIO (defines the patient type — follow closely):
 {scenario}
 
-Each template below gets its own key in the "compositions" output dict (use the template_id exactly).
-Map required paths for each template into the corresponding compositions entry.
-For repeatable fields (cardinality 0..n / 1..n) generate multiple indexed entries where clinically
-appropriate — e.g. multiple diagnoses, multiple observations.
-
 {templates_section.strip()}
+
+STEP 1 — Before writing JSON, think through the clinical timeline:
+For each template above, list every distinct clinical event in the patient's story that
+would produce a separate composition of that type. Example:
+  KDS_Laborbericht: [admission labs 2024-03-15, follow-up labs 2024-03-22]
+  KDS_Diagnose: [diagnosis documented 2024-03-15]
+
+STEP 2 — Write the JSON using that timeline.
+Each template key maps to a LIST — one dict per event from step 1.
+Multiple analytes/diagnoses within one event use :0/:1 indexes inside one dict.
 
 Make this patient unique — vary age, gender, severity, comorbidities, and clinical course.
 """.strip()
@@ -320,6 +343,7 @@ class ResourceComposerAgent:
         analysis: TemplateAnalysis,
         format: str,
         validation_errors: str = "",
+        field_values: dict | None = None,
     ) -> str:
         """
         Generate a composition/resource for the given journey and template.
@@ -329,10 +353,16 @@ class ResourceComposerAgent:
             analysis: Template structure (paths, types, value sets)
             format: OPENEHR_FLAT | OPENEHR_CANONICAL | FHIR_R4
             validation_errors: Formatted error list from previous attempt (empty on first try)
+            field_values: Pre-mapped values for this specific encounter; if None, falls back
+                          to the first (or only) entry in journey.compositions[template_id]
 
         Returns:
             Raw JSON string of the generated resource
         """
+        if field_values is None:
+            entries = journey.compositions.get(analysis.template_id, [{}])
+            field_values = entries[0] if entries else {}
+
         error_section = ""
         if validation_errors:
             error_section = f"""
@@ -350,24 +380,23 @@ Generate a valid {format} resource for this patient journey.
 TEMPLATE: {analysis.name} (ID: {analysis.template_id})
 PATIENT: {journey.patient_id}, age {journey.age}, {journey.gender}
 
-CODED FIELDS — look up codes for these before including them:
+CODED FIELDS (pre-resolved — |code and |terminology are already in field_values, copy verbatim):
 {_format_coded_elements(analysis.required_elements + analysis.optional_elements)}
 
 {ig_section}
-PRE-MAPPED FIELD VALUES (copy verbatim — look up |code and |terminology for coded fields):
-{_to_toon(journey.compositions.get(analysis.template_id, {}))}
+PRE-MAPPED FIELD VALUES (copy every key verbatim — codes are already resolved):
+{_to_toon(field_values)}
 
 {error_section}
-Use the terminology tools to look up correct codes before populating coded fields.
 Return ONLY the JSON resource — no markdown, no explanation.
 """.strip()
 
         _compose_thread_local.last_prompt = user_msg  # stored per-thread for failure diagnostics
-        return self._call_with_tools(RESOURCE_COMPOSER_SYSTEM, user_msg)
+        return self._call_llm(RESOURCE_COMPOSER_SYSTEM, user_msg)
 
-    def _call_with_tools(self, system: str, user: str) -> str:
-        """Invoke the LLM with tool access using the configured provider."""
-        return self.llm(system, user, self._tool_defs, self._handlers)
+    def _call_llm(self, system: str, user: str) -> str:
+        """Invoke the LLM for pure JSON serialization — no tools needed."""
+        return self.llm(system, user)
 
     def _anthropic_tool_loop(self, client, system: str, user: str) -> str:
         import os
@@ -413,6 +442,225 @@ Return ONLY the JSON resource — no markdown, no explanation.
                 break
 
         return ""
+
+
+TERMINOLOGY_RESOLVER_SYSTEM = """
+You are a clinical terminology expert selecting the best code match.
+Given a clinical display term and a list of candidate codes from a terminology server,
+return the single best match as JSON: {"code": "...", "system": "..."}
+Return ONLY the JSON object. No markdown, no explanation.
+""".strip()
+
+
+class TerminologyResolverAgent:
+    """
+    Pre-resolves all coded fields in a PatientJourney before composition.
+    Fills |code and |terminology into field_values so the composer needs no tools.
+
+    Three resolution modes (in priority order per field):
+    1. Local at-codes  — matched directly from DataElement.allowed_codes (no I/O)
+    2. Constrained     — ValueSet URL known → expand + fuzzy-match (HTTP, no LLM)
+    3. Unconstrained   — search_terminology directly in Python; LLM picks if ambiguous
+    """
+
+    _resolved_codes_cache: dict[tuple[str, str], tuple[str, str]] = {}
+    _cache_lock = threading.Lock()
+
+    def __init__(self, llm: Callable, terminology_tools: TerminologyTools):
+        self.llm = llm
+        self.terminology = terminology_tools
+
+    def resolve(
+        self,
+        journey: PatientJourney,
+        analyses: list[TemplateAnalysis],
+        log_fn: Callable[[str], None] | None = None,
+    ) -> PatientJourney:
+        """Return a new PatientJourney with |code and |terminology filled for all coded fields."""
+        if log_fn is None:
+            log_fn = lambda _: None  # noqa: E731
+
+        element_index = self._build_element_index(analyses)
+        new_compositions: dict[str, list[dict[str, Any]]] = {}
+
+        total_resolved = 0
+        for template_id, entries in journey.compositions.items():
+            new_entries = []
+            for fv in entries:
+                enriched, n = self._resolve_field_values(fv, element_index)
+                total_resolved += n
+                new_entries.append(enriched)
+            new_compositions[template_id] = new_entries
+
+        if total_resolved:
+            log_fn(f"  [green]✓[/green] Pre-resolved {total_resolved} terminology codes")
+
+        return journey.model_copy(update={"compositions": new_compositions})
+
+    def _build_element_index(self, analyses: list[TemplateAnalysis]) -> dict[str, DataElement]:
+        """normalized_base_path → DataElement for every coded field."""
+        index: dict[str, DataElement] = {}
+        for analysis in analyses:
+            for el in analysis.required_elements + analysis.optional_elements:
+                if "CODED" not in el.data_type.upper() and "CODEABLECONCEPT" not in el.data_type.upper():
+                    continue
+                base = el.path[:-6] if el.path.endswith("|value") else el.path
+                index[_normalize_path(base)] = el
+        return index
+
+    def _resolve_field_values(
+        self,
+        field_values: dict[str, Any],
+        element_index: dict[str, DataElement],
+    ) -> tuple[dict[str, Any], int]:
+        result = dict(field_values)
+        n = 0
+        for key, value in field_values.items():
+            if not key.endswith("|value") or not isinstance(value, str) or not value.strip():
+                continue
+            base = key[:-6]
+            code_key = base + "|code"
+            if field_values.get(code_key):
+                continue  # already resolved
+            element = element_index.get(_normalize_path(base))
+            if element is None:
+                continue
+            resolved = self._resolve_code(value, element)
+            if resolved:
+                result[code_key] = resolved[0]
+                result[base + "|terminology"] = resolved[1]
+                n += 1
+        return result, n
+
+    def _resolve_code(self, display_term: str, element: DataElement) -> tuple[str, str] | None:
+        cache_key = (display_term.lower().strip(),
+                     element.value_set_url or element.terminology or element.path)
+        with self._cache_lock:
+            if cache_key in self._resolved_codes_cache:
+                return self._resolved_codes_cache[cache_key]
+
+        result = None
+        local_codes = [ac for ac in element.allowed_codes if ac.terminology in ("local", "")]
+        if local_codes:
+            result = self._resolve_local(display_term, element)
+        elif element.value_set_url:
+            result = self._resolve_constrained(display_term, element.value_set_url)
+        else:
+            result = self._resolve_unconstrained(display_term, element)
+
+        if result:
+            with self._cache_lock:
+                self._resolved_codes_cache[cache_key] = result
+        return result
+
+    def _resolve_local(self, display_term: str, element: DataElement) -> tuple[str, str] | None:
+        term_lower = display_term.lower().strip()
+        for ac in element.allowed_codes:
+            if ac.label.lower().strip() == term_lower:
+                return (ac.value, "local")
+        for ac in element.allowed_codes:
+            label = ac.label.lower().strip()
+            if term_lower in label or label in term_lower:
+                return (ac.value, "local")
+        return None
+
+    def _resolve_constrained(self, display_term: str, value_set_url: str) -> tuple[str, str] | None:
+        raw = self.terminology._get("/ValueSet/$expand", {"url": value_set_url, "count": "50"})
+        try:
+            contains = json.loads(raw).get("expansion", {}).get("contains", [])
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not contains:
+            return None
+        term_lower = display_term.lower().strip()
+        for e in contains:
+            if e.get("display", "").lower().strip() == term_lower:
+                return (e["code"], e.get("system", ""))
+        for e in contains:
+            d = e.get("display", "").lower()
+            if term_lower in d or d in term_lower:
+                return (e["code"], e.get("system", ""))
+        # filtered fallback
+        raw2 = self.terminology._get("/ValueSet/$expand", {"url": value_set_url, "filter": display_term, "count": "5"})
+        try:
+            filtered = json.loads(raw2).get("expansion", {}).get("contains", [])
+            if filtered:
+                return (filtered[0]["code"], filtered[0].get("system", ""))
+        except (json.JSONDecodeError, ValueError, KeyError):
+            pass
+        return None
+
+    def _resolve_unconstrained(self, display_term: str, element: DataElement) -> tuple[str, str] | None:
+        systems = self._infer_systems(element)
+        system_to_vs = {
+            "http://snomed.info/sct": "http://snomed.info/sct?fhir_vs",
+            "http://loinc.org": "http://loinc.org/vs",
+            "http://hl7.org/fhir/sid/icd-10": "http://hl7.org/fhir/sid/icd-10",
+            "http://www.nlm.nih.gov/research/umls/rxnorm": "http://www.nlm.nih.gov/research/umls/rxnorm/vs",
+        }
+        all_matches = []
+        for system in systems:
+            vs_url = system_to_vs.get(system, system)
+            raw = self.terminology._get("/ValueSet/$expand", {"url": vs_url, "filter": display_term, "count": "5"})
+            try:
+                for entry in json.loads(raw).get("expansion", {}).get("contains", []):
+                    all_matches.append({
+                        "code": entry.get("code"),
+                        "display": entry.get("display", ""),
+                        "system": entry.get("system", system),
+                    })
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        if not all_matches:
+            return None
+
+        term_lower = display_term.lower().strip()
+        for m in all_matches:
+            if m["display"].lower().strip() == term_lower:
+                return (m["code"], m["system"])
+
+        if len(all_matches) == 1:
+            return (all_matches[0]["code"], all_matches[0]["system"])
+
+        # Multiple candidates — ask LLM to pick (text only, no tools)
+        try:
+            user_msg = (
+                f'Clinical term: "{display_term}"\n'
+                f'Path: {element.path}\n'
+                f'Candidates:\n{json.dumps(all_matches[:6], indent=2)}\n\n'
+                f'Return ONLY: {{"code": "...", "system": "..."}}'
+            )
+            picked = extract_json(self.llm(TERMINOLOGY_RESOLVER_SYSTEM, user_msg))
+            if picked.get("code"):
+                return (str(picked["code"]), str(picked.get("system", "")))
+        except Exception:
+            pass
+
+        return (all_matches[0]["code"], all_matches[0]["system"])
+
+    def _infer_systems(self, element: DataElement) -> list[str]:
+        hint = (element.terminology or "").lower()
+        path = element.path.lower()
+        if "snomed" in hint:
+            return ["http://snomed.info/sct"]
+        if "loinc" in hint:
+            return ["http://loinc.org"]
+        if "icd" in hint:
+            return ["http://hl7.org/fhir/sid/icd-10"]
+        if "rxnorm" in hint or "medication" in hint:
+            return ["http://www.nlm.nih.gov/research/umls/rxnorm"]
+        if any(x in path for x in ("analyt", "labortest", "loinc")):
+            return ["http://loinc.org", "http://snomed.info/sct"]
+        if any(x in path for x in ("diagnos", "problem", "condition")):
+            return ["http://snomed.info/sct", "http://hl7.org/fhir/sid/icd-10"]
+        if any(x in path for x in ("medic", "drug", "substanz")):
+            return ["http://www.nlm.nih.gov/research/umls/rxnorm", "http://snomed.info/sct"]
+        return ["http://snomed.info/sct", "http://loinc.org"]
+
+
+def _normalize_path(path: str) -> str:
+    return _INDEX_RE.sub(":N", path)
 
 
 # ---------------------------------------------------------------------------

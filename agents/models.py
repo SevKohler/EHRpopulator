@@ -5,7 +5,7 @@ Shared data models for the EHR Populator agent pipeline.
 from __future__ import annotations
 from enum import Enum
 from typing import Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ResourceFormat(str, Enum):
@@ -94,19 +94,31 @@ class PatientJourney(BaseModel):
     """
     A realistic patient journey, produced by the JourneyGeneratorAgent.
 
-    compositions maps each template_id to its own field_values dict, so the
-    composer for template X only sees paths belonging to X.  Repeatable
-    elements are expressed with integer indexes in the path, e.g.
-    "diagnosis[0]/value|value" and "diagnosis[1]/value|value".
+    compositions maps each template_id to a list of field_values dicts —
+    one dict per clinical session/encounter for that template.
+    Single-encounter responses (bare dict) are normalised to a one-element list.
     """
     patient_id: str
     age: int
     gender: str
-    narrative: str                                    # Clinical context / summary
-    compositions: dict[str, dict[str, Any]] = Field( # template_id → {path → value}
+    narrative: str                                         # Clinical context / summary
+    compositions: dict[str, list[dict[str, Any]]] = Field( # template_id → [{path→value}, …]
         default_factory=dict,
-        description="Per-template field_values, keyed by template_id"
+        description="Per-template list of field_values dicts, keyed by template_id"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_compositions(cls, data: Any) -> Any:
+        """Wrap bare dicts (single-encounter) in a list so downstream always sees a list."""
+        if isinstance(data, dict) and "compositions" in data:
+            comps = data["compositions"]
+            if isinstance(comps, dict):
+                normalized = {}
+                for k, v in comps.items():
+                    normalized[k] = v if isinstance(v, list) else [v]
+                data = {**data, "compositions": normalized}
+        return data
 
 
 class ValidationIssue(BaseModel):
