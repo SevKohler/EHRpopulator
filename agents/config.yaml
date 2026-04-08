@@ -6,8 +6,15 @@ llm:
   model: ${LLM_MODEL:claude-opus-4-5}
   api_key: ${LLM_API_KEY:}             # or ANTHROPIC_API_KEY / OPENAI_API_KEY
   base_url: ${LLM_BASE_URL:}           # for self-hosted OpenAI-compatible servers
-  temperature: 0.7
-  max_tokens: 16384
+  temperature: 0.3
+  # context_window: total token budget of the model (input + output). Default 32768.
+  # Set to the actual value for your model to avoid silent empty responses.
+  # Common values: 32768 (32k), 65536 (64k), 131072 (128k).
+  # context_window: 32768
+  # NOTE: Token costs scale with patients × templates × retries.
+  # A single composition with terminology lookups uses ~8k–20k tokens.
+  # 10 patients × 3 templates = ~30 compositions = ~300k–600k tokens per run.
+  # Use a smaller/faster model for large test runs to reduce cost and latency.
 
   # Optional: use a different (cheaper) model for the template analyzer
   # template_analyzer_model: claude-haiku-4-5-20251001
@@ -53,3 +60,4 @@ pipeline:
   output_dir: "../output"    # Where to write generated files
   save_intermediate: true    # Save after each successful generation
   workers: 4                 # Parallel patients (increase for higher throughput)
+  max_llm_concurrency: 4     # Max concurrent LLM calls across all patients+templates

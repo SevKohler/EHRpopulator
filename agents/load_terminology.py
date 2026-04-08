@@ -127,11 +127,169 @@ def poll_snomed_import(snowstorm_url: str, import_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# LOINC CSV → FHIR CodeSystem (direct POST to Snowstorm, no hapi-fhir-cli)
+# ---------------------------------------------------------------------------
+
+def _loinc_docker_upload(zip_path: Path, log=print) -> tuple[bool, str]:
+    """
+    Upload LOINC by running hapi-fhir-cli inside the Snowstorm container.
+
+    hapi-fhir-cli creates a temp file in /tmp and tells Snowstorm to read it
+    from there. This only works when both share the same filesystem — i.e. when
+    hapi-fhir-cli runs inside the same container as Snowstorm.
+    """
+    import subprocess
+
+    cli_jar = _HAPI_CLI_DIR / "hapi-fhir-cli.jar"
+    if not cli_jar.exists():
+        _ensure_hapi_cli(log)
+    if not cli_jar.exists():
+        return False, "hapi-fhir-cli.jar not found — run make setup first"
+
+    container = "ehrpopulator-snowstorm-1"
+
+    try:
+        log(f"  Copying {zip_path.name} into container...")
+        subprocess.run(
+            ["docker", "cp", str(zip_path.resolve()), f"{container}:/tmp/loinc.zip"],
+            check=True, capture_output=True,
+        )
+        log(f"  Copying hapi-fhir-cli.jar into container...")
+        subprocess.run(
+            ["docker", "cp", str(cli_jar.resolve()), f"{container}:/tmp/hapi-fhir-cli.jar"],
+            check=True, capture_output=True,
+        )
+        log(f"  Running upload-terminology inside container (streaming output)...")
+        proc = subprocess.Popen(
+            [
+                "docker", "exec", container,
+                "java", "-jar", "/tmp/hapi-fhir-cli.jar",
+                "upload-terminology",
+                "-d", "/tmp/loinc.zip",
+                "-v", "r4",
+                "-t", "http://localhost:8080/fhir",
+                "-u", "http://loinc.org",
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True,
+        )
+        last_lines: list[str] = []
+        for line in proc.stdout:
+            line = line.rstrip()
+            log(f"  [dim]{line}[/dim]")
+            last_lines.append(line)
+            if len(last_lines) > 50:
+                last_lines.pop(0)
+
+        proc.wait(timeout=600)
+        if proc.returncode == 0:
+            return True, "ok"
+        return False, "\n".join(last_lines[-20:])
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return False, "timed out after 600s"
+    except Exception as e:
+        return False, str(e)
+
+
+def _loinc_zip_upload(zip_path: Path, fhir_base: str, log=print) -> tuple[bool, str]:
+    """
+    Upload a LOINC zip to Snowstorm via the FHIR $upload-external-code-system operation.
+    Sends the zip as a base64-encoded Attachment — the format Snowstorm expects.
+    """
+    log(f"  Calling $upload-external-code-system with {zip_path.name}...")
+    file_url = f"file:{zip_path.resolve()}"
+    payload = {
+        "resourceType": "Parameters",
+        "parameter": [
+            {"name": "system", "valueUri": "http://loinc.org"},
+            {"name": "file", "valueAttachment": {
+                "contentType": "application/zip",
+                "url": file_url,
+            }},
+        ],
+    }
+    try:
+        r = requests.post(
+            f"{fhir_base}/CodeSystem/$upload-external-code-system",
+            headers={"Content-Type": "application/fhir+json"},
+            json=payload,
+            timeout=600,
+        )
+        if r.status_code in (200, 201):
+            return True, "ok"
+        return False, f"HTTP {r.status_code}: {r.text[:400]}"
+    except Exception as e:
+        return False, str(e)
+
+
+def _loinc_dir_upload(loinc_dir: Path, fhir_base: str, log=print) -> tuple[bool, str]:
+    """
+    Read LoincTable/Loinc.csv from an unpacked LOINC folder, build a FHIR
+    CodeSystem containing only ACTIVE concepts, and POST it directly to
+    Snowstorm's FHIR endpoint.
+
+    This bypasses hapi-fhir-cli entirely — Snowstorm's FHIR endpoint accepts
+    CodeSystem resources directly but does not support the HAPI-specific
+    $upload-external-code-system operation that hapi-fhir-cli relies on.
+    """
+    import csv
+
+    csv_path = loinc_dir / "LoincTable" / "Loinc.csv"
+    if not csv_path.exists():
+        return False, f"Loinc.csv not found at {csv_path}"
+
+    log(f"  Reading {csv_path.name}...")
+    concepts = []
+    with open(csv_path, encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row.get("STATUS", "").strip().upper() != "ACTIVE":
+                continue
+            code = row.get("LOINC_NUM", "").strip()
+            display = (row.get("LONG_COMMON_NAME") or row.get("SHORTNAME") or "").strip()
+            if code and display:
+                concepts.append({"code": code, "display": display})
+
+    if not concepts:
+        return False, "No active concepts found in Loinc.csv"
+
+    log(f"  Posting {len(concepts):,} active LOINC concepts to Snowstorm...")
+
+    # Detect version from the directory name (e.g. Loinc_2.82 → 2.82)
+    version = loinc_dir.name.split("_")[-1] if "_" in loinc_dir.name else "unknown"
+
+    code_system = {
+        "resourceType": "CodeSystem",
+        "url": "http://loinc.org",
+        "version": version,
+        "name": "LOINC",
+        "title": "Logical Observation Identifiers, Names and Codes (LOINC)",
+        "status": "active",
+        "content": "complete",
+        "concept": concepts,
+    }
+
+    try:
+        r = requests.post(
+            f"{fhir_base}/CodeSystem",
+            headers={"Content-Type": "application/fhir+json"},
+            json=code_system,
+            timeout=600,
+        )
+        if r.status_code in (200, 201):
+            return True, f"ok — {len(concepts):,} concepts loaded"
+        return False, f"HTTP {r.status_code}: {r.text[:400]}"
+    except Exception as e:
+        return False, str(e)
+
+
+# ---------------------------------------------------------------------------
 # hapi-fhir-cli upload helper
 # ---------------------------------------------------------------------------
 
 _HAPI_CLI_DIR = REPO_ROOT / "terminology" / "hapi-fhir-cli"
-_HAPI_CLI_VERSION = "8.8.1"
+_HAPI_CLI_VERSION = "6.10.5"
 _HAPI_CLI_URL = (
     f"https://github.com/hapifhir/hapi-fhir/releases/download"
     f"/v{_HAPI_CLI_VERSION}/hapi-fhir-{_HAPI_CLI_VERSION}-cli.zip"
@@ -319,6 +477,9 @@ def load_seeds(snowstorm_url: str, fhir_base: str, log=print) -> dict:
     for path in sorted(SEEDS_DIR.iterdir()):
         if path.name.startswith(".") or path.suffix == ".md":
             continue
+        # Skip directories — LOINC folders are handled via their zip sibling
+        if path.is_dir():
+            continue
 
         name = path.name
         result = LoadResult()
@@ -347,8 +508,8 @@ def load_seeds(snowstorm_url: str, fhir_base: str, log=print) -> dict:
                         result.message = "already loaded"
                         loaded.add(name); save_state(loaded)
                     else:
-                        log(f"  Uploading {name} via hapi-fhir-cli...")
-                        ok, msg = _hapi_cli_upload(path, fhir_base, "http://loinc.org", log)
+                        log(f"  Uploading {name} via hapi-fhir-cli (inside Snowstorm container)...")
+                        ok, msg = _loinc_docker_upload(path, log)
                         result.ok = ok
                         result.message = msg
                         if ok:

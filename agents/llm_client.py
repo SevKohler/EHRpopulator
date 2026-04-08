@@ -35,7 +35,7 @@ def _anthropic_client(config: dict) -> Callable:
 
     client = anthropic.Anthropic(api_key=api_key)
     model = config.get("model", "claude-opus-4-5")
-    max_tokens = config.get("max_tokens", 16384)
+    max_tokens = config.get("max_tokens", 32768)
     temperature = config.get("temperature", 0.7)
 
     def call(system: str, user: str, tools: list[dict] | None = None) -> str:
@@ -124,18 +124,28 @@ def _openai_client(config: dict) -> Callable:
         client = openai.OpenAI(api_key=api_key, base_url=base_url)
         model = config.get("model", "gpt-4o")
 
-    max_tokens = config.get("max_tokens", 8192)
+    max_tokens = config.get("max_tokens", 32768)
+    context_window = config.get("context_window", 32768)
     temperature = config.get("temperature", 0.7)
 
-    def call(system: str, user: str, tools: list[dict] | None = None) -> str:
+    def call(system: str, user: str, tools: list[dict] | None = None, handlers: dict | None = None) -> str:
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
 
+        # Estimate input token usage (~4 chars/token) and leave room within the context window.
+        # This prevents silent empty responses when input + max_tokens overflows the model's context.
+        input_chars = len(system) + len(user)
+        if tools:
+            input_chars += sum(len(str(t)) for t in tools)
+        estimated_input_tokens = input_chars // 4
+        dynamic_max = context_window - estimated_input_tokens - 512  # 512 token safety buffer
+        effective_max = max(min(max_tokens, dynamic_max), 1024)  # always allow at least 1024 output
+
         kwargs: dict[str, Any] = {
             "model": model,
-            "max_tokens": max_tokens,
+            "max_tokens": effective_max,
             "temperature": temperature,
             "messages": messages,
         }
@@ -144,30 +154,52 @@ def _openai_client(config: dict) -> Callable:
             kwargs["tools"] = [_to_openai_tool(t) for t in tools]
             kwargs["tool_choice"] = "auto"
 
+        tool_calls_made = False
+
         while True:
             response = client.chat.completions.create(**kwargs)
             choice = response.choices[0]
 
+            if choice.finish_reason == "length":
+                raise RuntimeError(
+                    f"LLM output was truncated (max_tokens={effective_max} reached). "
+                    "Reduce template complexity or increase context_window in config."
+                )
+
             if choice.finish_reason == "stop":
-                return choice.message.content or ""
+                content = choice.message.content
+                if content and content.strip():
+                    return content
+                # Model finished tool calls but returned no text — ask explicitly for the JSON
+                if tool_calls_made:
+                    kwargs["messages"].append({"role": "assistant", "content": ""})
+                    kwargs["messages"].append({"role": "user", "content": "Now output the final JSON."})
+                    kwargs.pop("tools", None)
+                    kwargs.pop("tool_choice", None)
+                    final = client.chat.completions.create(**kwargs)
+                    return final.choices[0].message.content or ""
+                return ""
 
             if choice.finish_reason == "tool_calls" and tools:
+                tool_calls_made = True
                 tool_calls = choice.message.tool_calls
                 kwargs["messages"].append(choice.message)
                 for tc in tool_calls:
                     import json
                     result = _dispatch_tool(tc.function.name,
                                            json.loads(tc.function.arguments),
-                                           kwargs.get("_tool_handlers", {}))
+                                           handlers or {})
                     kwargs["messages"].append({
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": str(result),
                     })
             else:
-                break
-
-        return ""
+                raise RuntimeError(
+                    f"[llm_client] unexpected finish_reason={choice.finish_reason!r}, "
+                    f"tool_calls_made={tool_calls_made}, "
+                    f"content={repr((choice.message.content or '')[:300])}"
+                )
 
     return call
 

@@ -37,7 +37,7 @@ from models import (
     PatientJourney, GeneratedResource, ValidationResult, ValidationIssue,
 )
 from template_parser import parse_web_template, parse_structure_definition
-from agents import TemplateAnalyzerAgent, JourneyGeneratorAgent, ResourceComposerAgent
+from agents import TemplateAnalyzerAgent, JourneyGeneratorAgent, ResourceComposerAgent, _compose_thread_local
 from tools import TerminologyTools, EHRbaseTools
 from llm_client import build_llm
 
@@ -82,6 +82,8 @@ class Pipeline:
         self.max_retries = config.get("pipeline", {}).get("max_retries", 5)
         self.output_dir = Path(config.get("pipeline", {}).get("output_dir", "../output"))
         self.workers = config.get("pipeline", {}).get("workers", 4)
+        max_llm_concurrency = config.get("pipeline", {}).get("max_llm_concurrency", self.workers)
+        self._llm_semaphore = threading.Semaphore(max_llm_concurrency)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.template_analyzer = TemplateAnalyzerAgent(llm)
@@ -199,11 +201,12 @@ class Pipeline:
                 live.update(_get_renderable())
 
             log("[bold]Generating journey...[/bold]")
-            journey = self.journey_generator.generate(
-                analyses=analyses,
-                scenario=scenario,
-                patient_index=i,
-            )
+            with self._llm_semaphore:
+                journey = self.journey_generator.generate(
+                    analyses=analyses,
+                    scenario=scenario,
+                    patient_index=i,
+                )
 
             log(Panel(
                 escape(journey.narrative),
@@ -218,18 +221,26 @@ class Pipeline:
                 journey.model_dump_json(indent=2), encoding="utf-8"
             )
 
-            patient_resources = []
-            for j, (analysis, opt_xml, struct_def) in enumerate(template_infos):
+            def compose_template(args):
+                j, analysis, opt_xml, struct_def = args
                 log(f"\n[bold]Template {j+1}/{len(template_infos)}:[/bold] "
                     f"[cyan]{escape(analysis.name)}[/cyan]")
-                resource = self._compose_with_validation(
-                    journey, analysis, format, opt_xml, struct_def, log
-                )
+                with self._llm_semaphore:
+                    resource = self._compose_with_validation(
+                        journey, analysis, format, opt_xml, struct_def, log
+                    )
                 with lock:
                     self._save(resource, i)
                 if upload:
                     self._upload(resource)
-                patient_resources.append(resource)
+                return resource
+
+            with ThreadPoolExecutor(max_workers=len(template_infos)) as template_executor:
+                patient_resources = list(template_executor.map(
+                    compose_template,
+                    [(j, analysis, opt_xml, struct_def)
+                     for j, (analysis, opt_xml, struct_def) in enumerate(template_infos)],
+                ))
             return patient_resources
 
         with Live(_get_renderable(), console=console, refresh_per_second=4) as live:
@@ -281,12 +292,17 @@ class Pipeline:
         )
 
         validation_errors = ""
+        resource = None
 
         for attempt in range(1, self.max_retries + 1):
             log_fn(f"  [dim]Attempt {attempt}/{self.max_retries} — composing...[/dim]")
 
             raw = self.composer.compose(journey, analysis, compose_format.value, validation_errors)
             raw = _strip_markdown(raw)
+            if not raw.strip():
+                log_fn(f"  [red]LLM returned empty response on attempt {attempt}[/red]")
+                validation_errors = "Your previous response was empty. You MUST return a non-empty JSON object."
+                continue
 
             # Convert flat → canonical via the SDK if canonical output was requested
             if format == ResourceFormat.OPENEHR_CANONICAL:
@@ -329,7 +345,21 @@ class Pipeline:
             else:
                 log_fn(f"  [red]Max retries reached — saving best-effort result.[/red]")
 
-        return resource  # type: ignore[return-value]
+        if resource is None:
+            log_fn(f"  [red]All {self.max_retries} attempts returned empty responses.[/red]")
+            return GeneratedResource(
+                patient_id=journey.patient_id,
+                template_id=analysis.template_id,
+                format=format,
+                content="{}",
+                generation_attempt=self.max_retries,
+                valid=False,
+                validation_issues=[ValidationIssue(
+                    severity="ERROR", location="/",
+                    message="LLM returned empty response on all attempts",
+                )],
+            )
+        return resource
 
     def _flat_to_canonical(
         self,
@@ -538,6 +568,12 @@ class Pipeline:
             }
             errors_path = out_dir / filename.replace(".json", ".errors.json")
             errors_path.write_text(json.dumps(errors_data, indent=2), encoding="utf-8")
+
+            # Save the last prompt for debugging
+            last_prompt = getattr(_compose_thread_local, "last_prompt", None)
+            if last_prompt:
+                prompt_path = out_dir / filename.replace(".json", ".prompt.txt")
+                prompt_path.write_text(last_prompt, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

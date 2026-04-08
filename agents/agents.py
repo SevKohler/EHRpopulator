@@ -13,7 +13,23 @@ Three agents, each with a focused role:
 from __future__ import annotations
 import json
 import re
+import threading
 from typing import Callable, Any
+
+_compose_thread_local = threading.local()
+
+try:
+    from toon_format import encode as _toon_encode
+    _TOON_AVAILABLE = True
+except ImportError:
+    _toon_encode = None
+    _TOON_AVAILABLE = False
+
+
+def _to_toon(data) -> str:
+    if _TOON_AVAILABLE:
+        return _toon_encode(data)
+    return json.dumps(data, indent=2)
 
 from models import (
     TemplateAnalysis, TemplateType, PatientJourney, DataElement,
@@ -132,6 +148,15 @@ For openEHR FLAT JSON (EHRbase FLAT format):
 - Repeated entries use :0, :1 index notation: e.g. pro_laboranalyt:0/messwert|magnitude
 - Do NOT generate aqlPath-style paths (with at-codes or archetype IDs in brackets)
 
+MANDATORY — A valid composition MUST include ALL of the following:
+1. RM metadata: <root>/language|code, <root>/language|terminology, <root>/territory|code,
+   <root>/territory|terminology, <root>/composer|name, <root>/category|code,
+   <root>/category|value, <root>/category|terminology, <root>/context/start_time,
+   <root>/context/setting|code, <root>/context/setting|value, <root>/context/setting|terminology
+2. ALL clinical content paths from field_values — lab results, diagnoses, observations, etc.
+   WITHOUT these clinical paths the validator will reject the composition with "content is required".
+   Omitting clinical content is the most common error — always include every path from field_values.
+
 MANDATORY CODING RULES — apply to every coded field:
 - For every path ending in |value: you MUST also emit the companion |code and |terminology keys
 - NEVER copy the display text into |code — |code must be a real numeric/alphanumeric code
@@ -153,6 +178,13 @@ For FHIR R4 JSON:
 When validation errors are provided from a previous attempt:
 - Fix only the paths listed in the errors
 - Do not change anything else
+
+CRITICAL — the response must ALWAYS be a non-empty JSON object containing actual
+clinical content paths (lab results, diagnoses, observations, etc.).
+A response with only metadata fields (language, territory, composer, category) is
+invalid and will fail with "content is required".
+If you are unsure of a value, use a plausible placeholder — never return an empty
+object or omit the clinical data section.
 """.strip()
 
 
@@ -217,7 +249,9 @@ class JourneyGeneratorAgent:
     ) -> PatientJourney:
         templates_section = ""
         for analysis in analyses:
-            templates_section += f"""
+            aid = id(analysis)
+            if aid not in _journey_section_cache:
+                _journey_section_cache[aid] = f"""
 TEMPLATE: {analysis.name}
   template_id (use as key in compositions): "{analysis.template_id}"
   Clinical concepts: {', '.join(analysis.clinical_concepts)}
@@ -227,6 +261,7 @@ TEMPLATE: {analysis.name}
   Optional fields (include where clinically appropriate):
 {_format_elements(analysis.optional_elements, slim=True)}
 """.strip() + "\n\n"
+            templates_section += _journey_section_cache[aid]
 
         user_msg = f"""
 Generate patient data for patient #{patient_index + 1}.
@@ -313,61 +348,37 @@ Fix only the paths listed above. Keep the rest of the resource unchanged.
 Generate a valid {format} resource for this patient journey.
 
 TEMPLATE: {analysis.name} (ID: {analysis.template_id})
-{analysis.description}
+PATIENT: {journey.patient_id}, age {journey.age}, {journey.gender}
 
-REQUIRED PATHS AND TYPES:
-{_format_elements(analysis.required_elements)}
-
-OPTIONAL PATHS (include where data is available):
-{_format_elements(analysis.optional_elements)}
+CODED FIELDS — look up codes for these before including them:
+{_format_coded_elements(analysis.required_elements + analysis.optional_elements)}
 
 {ig_section}
-PATIENT: {journey.patient_id}, age {journey.age}, {journey.gender}
-SUMMARY: {journey.narrative}
-
-PRE-MAPPED FIELD VALUES (use these directly — look up codes for coded fields):
-{json.dumps(journey.compositions.get(analysis.template_id, {}), indent=2)}
+PRE-MAPPED FIELD VALUES (copy verbatim — look up |code and |terminology for coded fields):
+{_to_toon(journey.compositions.get(analysis.template_id, {}))}
 
 {error_section}
 Use the terminology tools to look up correct codes before populating coded fields.
 Return ONLY the JSON resource — no markdown, no explanation.
 """.strip()
 
-        # Pass tool handlers to the LLM callable via a side-channel
-        # (the LLM callable checks for _tool_handlers in its kwargs)
-        # We wrap the call to inject handlers
+        _compose_thread_local.last_prompt = user_msg  # stored per-thread for failure diagnostics
         return self._call_with_tools(RESOURCE_COMPOSER_SYSTEM, user_msg)
 
     def _call_with_tools(self, system: str, user: str) -> str:
-        """
-        Invoke the LLM with tool access.
-        The llm callable must support an agentic tool-use loop.
-        """
-        import anthropic as _anthropic
-
-        # Re-run the tool-use loop manually to keep the agents.py file self-contained
-        api_key = None
-        for ev in ["ANTHROPIC_API_KEY"]:
-            api_key = os.environ.get(ev)
-            if api_key:
-                break
-
-        if api_key:
-            client = _anthropic.Anthropic(api_key=api_key)
-            return self._anthropic_tool_loop(client, system, user)
-        else:
-            # Fall back to non-tool call (OpenAI path handled in llm_client)
-            return self.llm(system, user, self._tool_defs)
+        """Invoke the LLM with tool access using the configured provider."""
+        return self.llm(system, user, self._tool_defs, self._handlers)
 
     def _anthropic_tool_loop(self, client, system: str, user: str) -> str:
         import os
         messages = [{"role": "user", "content": user}]
         model = os.environ.get("LLM_MODEL", "claude-opus-4-5")
+        max_tokens = int(os.environ.get("LLM_MAX_TOKENS", "32768"))
 
         while True:
             response = client.messages.create(
                 model=model,
-                max_tokens=8192,
+                max_tokens=max_tokens,
                 system=system,
                 messages=messages,
                 tools=self._tool_defs,
@@ -428,11 +439,36 @@ def extract_json(text: str) -> dict:
     raise ValueError("Unterminated JSON in LLM output")
 
 
+def _format_coded_elements(elements: list[DataElement]) -> str:
+    """List only coded fields (DV_CODED_TEXT) with their value sets/allowed codes.
+    Used in the composer prompt — non-coded fields are simply copied from field_values.
+    """
+    coded = [el for el in elements if "CODED" in el.data_type.upper()]
+    if not coded:
+        return "(none — all fields are plain text/quantity, copy from field_values)"
+    lines = []
+    for el in coded:
+        repeatable = el.cardinality not in ("0..1", "1..1", "1")
+        card = " (repeatable)" if repeatable else ""
+        line = f"  - {el.path}{card}"
+        if el.allowed_codes:
+            codes = ", ".join(f"{c.value}={c.label}" for c in el.allowed_codes[:6])
+            if len(el.allowed_codes) > 6:
+                codes += f" (+{len(el.allowed_codes)-6} more)"
+            line += f" → codes: {codes}"
+        elif el.value_set_url:
+            line += f" → ValueSet: {el.value_set_url}"
+        elif el.terminology:
+            line += f" → terminology: {el.terminology}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _format_elements(elements: list[DataElement], slim: bool = False) -> str:
     """Format elements for prompt injection.
 
-    slim=True omits allowed_codes (used for journey generation — the LLM writes
-    display terms and the composer handles code lookup, so the code list wastes tokens).
+    slim=True omits allowed_codes and descriptions (used for journey generation and
+    composition — the LLM writes display terms and the composer handles code lookup).
     """
     if not elements:
         return "(none)"
@@ -442,12 +478,11 @@ def _format_elements(elements: list[DataElement], slim: bool = False) -> str:
         card_str = f"{el.cardinality} *** REPEATABLE — use :0,:1,… indexes ***" if repeatable else el.cardinality
         line = f"  - {el.path} [{el.data_type}] ({card_str})"
 
-        if el.description:
-            line += f"\n      Description: {el.description}"
+        # Skip descriptions and annotations for slim mode (composer already has field_values)
+        if not slim and el.description:
+            line += f"\n      Description: {el.description[:120]}"
 
-        if el.annotations:
-            for k, v in el.annotations.items():
-                line += f"\n      Annotation [{k}]: {v}"
+        # Annotations are always skipped — they add tokens without helping composition
 
         if not slim:
             if el.allowed_codes:
@@ -492,3 +527,8 @@ def _format_ig_context(ig_context) -> str:
 
 
 import os
+
+# Cache for formatted journey prompt sections (keyed by analysis object id).
+# Analysis objects are created once per pipeline run and reused across patients,
+# so id() is stable for the lifetime of the run.
+_journey_section_cache: dict[int, str] = {}

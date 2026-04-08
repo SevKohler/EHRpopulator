@@ -80,10 +80,7 @@ def _build_knowledge_text(rm: dict) -> str:
     ehr = rm.get("ehr_information_model", {})
     common = rm.get("common_information_model", {})
 
-    sections.append("═══════════════════════════════════════════════════════")
     sections.append("openEHR REFERENCE MODEL — CLASS DEFINITIONS")
-    sections.append("(extracted from openEHR EHR IM and Common IM specifications)")
-    sections.append("═══════════════════════════════════════════════════════")
 
     # --- Composition & context ---
     sections.append("\n## COMPOSITION AND EVENT CONTEXT\n")
@@ -103,7 +100,6 @@ def _build_knowledge_text(rm: dict) -> str:
             sections.append(_render_class(cls))
 
     sections.append("""
-─────────────────────────────────────────────────
 ISM NOTE: careflow_step terminology = "local"  (at-code from the archetype, e.g. "at0016")
           current_state terminology = "openehr"
           Most common state for administered medication / completed procedure: 532=completed
@@ -117,35 +113,13 @@ ISM NOTE: careflow_step terminology = "local"  (at-code from the archetype, e.g.
         if cls:
             sections.append(_render_class(cls))
 
-    sections.append("""
-─────────────────────────────────────────────────
-EHRBASE FLAT FORMAT — REQUIRED RM-LEVEL FIELDS
-These fields MUST appear in every composition, prefixed with the template root id.
-Replace {root} with the template root id (e.g. "laborbericht", "kds_diagnose").
-
-  {root}/language|code               ISO 639-1 code (e.g. "de", "en")
-  {root}/language|terminology        "ISO_639-1"
-  {root}/territory|code              ISO 3166-1 alpha-2 (e.g. "DE", "US")
-  {root}/territory|terminology       "ISO_3166-1"
-  {root}/composer|name               name of the authoring clinician
-  {root}/category|code               "433" for event compositions
-  {root}/category|value              "event"
-  {root}/category|terminology        "openehr"
-  {root}/context/start_time         encounter start (ISO 8601)
-  {root}/context/setting|code        openehr setting code (e.g. 225=home, 232=secondary care)
-  {root}/context/setting|value       setting display text
-  {root}/context/setting|terminology "openehr"
-  {root}/context/_health_care_facility|name   facility name (underscore prefix = optional RM field)
-  {root}/context/_end_time           encounter end time (ISO 8601, optional)
-""")
-
     return "\n".join(sections)
 
 
 # Build once at import time
 _rm_data   = _load_rm()
 _term_data = _load_terminology()
-OPENEHR_RM_KNOWLEDGE = _build_knowledge_text(_rm_data) + "\n" + _render_terminology(_term_data)
+OPENEHR_RM_KNOWLEDGE = _build_knowledge_text(_rm_data)
 
 
 def get_class_info(class_name: str) -> dict | None:

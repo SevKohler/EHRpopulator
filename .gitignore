@@ -66,3 +66,4 @@ logs/
 # Jupyter
 .ipynb_checkpoints/
 *.ipynbagents/openEHRKnowledge/*.pdf
+terminology/hapi-fhir-cli/

@@ -21,3 +21,6 @@ python-dotenv>=1.0.1       # .env file support
 
 # Retry
 tenacity>=9.0.0            # Retry with backoff
+
+# Token optimisation
+toon-format @ git+https://github.com/toon-format/toon-python.git

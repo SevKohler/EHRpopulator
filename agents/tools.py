@@ -12,7 +12,50 @@ from __future__ import annotations
 import os
 import json
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
+
+try:
+    from toon_format import encode as _toon_encode
+    _TOON_AVAILABLE = True
+except ImportError:
+    _TOON_AVAILABLE = False
+
+
+def _vs_to_toon(raw: str) -> str:
+    """Extract coding entries from a FHIR ValueSet expansion and encode as TOON.
+    Falls back to raw string if TOON is unavailable or parsing fails."""
+    if not _TOON_AVAILABLE:
+        return raw
+    try:
+        data = json.loads(raw)
+        contains = data.get("expansion", {}).get("contains", [])
+        if not contains:
+            return raw
+        entries = [
+            {"code": e.get("code", ""), "display": e.get("display", ""), "system": e.get("system", "")}
+            for e in contains
+        ]
+        return _toon_encode({"matches": entries})
+    except Exception:
+        return raw
+
+
+def _params_to_toon(raw: str) -> str:
+    """Extract key fields from a FHIR Parameters response and encode as TOON."""
+    if not _TOON_AVAILABLE:
+        return raw
+    try:
+        data = json.loads(raw)
+        params = {}
+        for p in data.get("parameter", []):
+            name = p.get("name")
+            value = p.get("valueString") or p.get("valueCode") or p.get("valueBoolean")
+            if name and value is not None:
+                params[name] = value
+        return _toon_encode(params) if params else raw
+    except Exception:
+        return raw
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +78,7 @@ class TerminologyTools:
         self.headers = {"Accept": "application/fhir+json"}
         if bearer_token:
             self.headers["Authorization"] = f"Bearer {bearer_token}"
+        self._cache: dict[tuple, str] = {}
 
     def expand_value_set(self, value_set_url: str, filter: str = "") -> str:
         """
@@ -44,13 +88,13 @@ class TerminologyTools:
         params = {"url": value_set_url, "count": "20"}
         if filter:
             params["filter"] = filter
-        return self._get("/ValueSet/$expand", params)
+        return _vs_to_toon(self._get("/ValueSet/$expand", params))
 
     def lookup_code(self, system: str, code: str) -> str:
         """
         Look up a specific code in a code system to verify it is valid and get its display name.
         """
-        return self._get("/CodeSystem/$lookup", {"system": system, "code": code})
+        return _params_to_toon(self._get("/CodeSystem/$lookup", {"system": system, "code": code}))
 
     def search_snomed(self, description: str) -> str:
         """
@@ -63,7 +107,7 @@ class TerminologyTools:
             "filter": description,
             "count": "5",
         }
-        return self._get("/ValueSet/$expand", params)
+        return _vs_to_toon(self._get("/ValueSet/$expand", params))
 
     def search_loinc(self, description: str) -> str:
         """
@@ -75,7 +119,7 @@ class TerminologyTools:
             "filter": description,
             "count": "5",
         }
-        return self._get("/ValueSet/$expand", params)
+        return _vs_to_toon(self._get("/ValueSet/$expand", params))
 
     def list_code_systems(self) -> str:
         """
@@ -87,15 +131,15 @@ class TerminologyTools:
         raw = self._get("/CodeSystem", {"_summary": "true", "_count": "100"})
         try:
             data = json.loads(raw)
-            systems = []
-            for entry in data.get("entry", []):
-                res = entry.get("resource", {})
-                systems.append({
-                    "url": res.get("url", ""),
-                    "name": res.get("name") or res.get("title", ""),
-                    "version": res.get("version", ""),
-                })
-            return json.dumps({"code_systems": systems})
+            systems = [
+                {
+                    "url": res.get("resource", {}).get("url", ""),
+                    "name": res.get("resource", {}).get("name") or res.get("resource", {}).get("title", ""),
+                    "version": res.get("resource", {}).get("version", ""),
+                }
+                for res in data.get("entry", [])
+            ]
+            return _toon_encode({"code_systems": systems}) if _TOON_AVAILABLE else json.dumps({"code_systems": systems})
         except Exception as e:
             return json.dumps({"error": str(e), "raw": raw[:500]})
 
@@ -120,22 +164,25 @@ class TerminologyTools:
             "http://www.nlm.nih.gov/research/umls/rxnorm": "http://www.nlm.nih.gov/research/umls/rxnorm/vs",
         }
 
-        results: dict[str, list] = {"matches": []}
-        for system in systems:
+        def _fetch(system: str) -> tuple[str, str]:
             vs_url = system_to_vs.get(system, system)
-            raw = self._get("/ValueSet/$expand", {"url": vs_url, "filter": description, "count": "5"})
-            try:
-                data = json.loads(raw)
-                for entry in data.get("expansion", {}).get("contains", []):
-                    results["matches"].append({
-                        "code": entry.get("code"),
-                        "display": entry.get("display"),
-                        "system": entry.get("system", system),
-                    })
-            except Exception:
-                pass
+            return system, self._get("/ValueSet/$expand", {"url": vs_url, "filter": description, "count": "5"})
 
-        return json.dumps(results)
+        results: dict[str, list] = {"matches": []}
+        with ThreadPoolExecutor(max_workers=len(systems)) as executor:
+            for system, raw in executor.map(lambda s: _fetch(s), systems):
+                try:
+                    data = json.loads(raw)
+                    for entry in data.get("expansion", {}).get("contains", []):
+                        results["matches"].append({
+                            "code": entry.get("code"),
+                            "display": entry.get("display"),
+                            "system": entry.get("system", system),
+                        })
+                except Exception:
+                    pass
+
+        return _toon_encode(results) if _TOON_AVAILABLE else json.dumps(results)
 
     def validate_code(self, system: str, code: str, value_set_url: str) -> str:
         """
@@ -153,6 +200,9 @@ class TerminologyTools:
         Returns matching concepts with code and display.
         Snowstorm-native endpoint — more powerful than ValueSet expand for SNOMED.
         """
+        cache_key = ("snomed_ecl", ecl, limit)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
         params = {"ecl": ecl, "limit": str(limit), "active": "true"}
         # Snowstorm native API: /browser/concepts  (not FHIR)
         snowstorm_base = self.base_url.replace("/fhir", "")
@@ -163,75 +213,77 @@ class TerminologyTools:
                 headers=self.headers,
                 timeout=15,
             )
-            return r.text
+            result = r.text
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            result = json.dumps({"error": str(e)})
+        self._cache[cache_key] = result
+        return result
 
     def _get(self, path: str, params: dict) -> str:
+        cache_key = (path, tuple(sorted(params.items())))
+        if cache_key in self._cache:
+            return self._cache[cache_key]
         try:
             r = requests.get(self.base_url + path, params=params,
                              headers=self.headers, timeout=15)
-            return r.text
+            result = r.text
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            result = json.dumps({"error": str(e)})
+        self._cache[cache_key] = result
+        return result
 
     def as_tool_definitions(self) -> list[dict]:
         """Return Anthropic-format tool definitions for all terminology tools."""
         return [
             {
                 "name": "expand_value_set",
-                "description": "Expand a FHIR ValueSet to get valid codes. Use before populating any coded clinical field.",
+                "description": "Expand a FHIR ValueSet to get valid codes.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "value_set_url": {"type": "string", "description": "Canonical ValueSet URL"},
-                        "filter": {"type": "string", "description": "Optional text filter to narrow results"},
+                        "value_set_url": {"type": "string"},
+                        "filter": {"type": "string"},
                     },
                     "required": ["value_set_url"],
                 },
             },
             {
                 "name": "lookup_code",
-                "description": "Look up a specific code in a code system to verify it is valid and get its display name.",
+                "description": "Verify a code and get its display name.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "system": {"type": "string", "description": "Code system URL, e.g. http://snomed.info/sct"},
-                        "code": {"type": "string", "description": "The code to look up"},
+                        "system": {"type": "string"},
+                        "code": {"type": "string"},
                     },
                     "required": ["system", "code"],
                 },
             },
             {
                 "name": "search_snomed",
-                "description": "Search SNOMED CT for concepts matching a clinical description. Use for diagnoses, procedures, findings.",
+                "description": "Search SNOMED CT by clinical description.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "description": {"type": "string", "description": "Clinical description to search for"},
+                        "description": {"type": "string"},
                     },
                     "required": ["description"],
                 },
             },
             {
                 "name": "search_loinc",
-                "description": "Search LOINC for codes matching a lab test, vital sign, or clinical observation.",
+                "description": "Search LOINC by lab test or observation description.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "description": {"type": "string", "description": "Test or observation description"},
+                        "description": {"type": "string"},
                     },
                     "required": ["description"],
                 },
             },
             {
                 "name": "list_code_systems",
-                "description": (
-                    "List all CodeSystems available on the terminology server. "
-                    "Call this when you need to discover which terminologies are loaded "
-                    "(e.g. SNOMED, LOINC, ICD-10, RxNorm, ATC, local systems). "
-                    "Returns url, name, and version for each system."
-                ),
+                "description": "List all CodeSystems on the terminology server (url, name, version).",
                 "input_schema": {
                     "type": "object",
                     "properties": {},
@@ -240,28 +292,15 @@ class TerminologyTools:
             },
             {
                 "name": "search_terminology",
-                "description": (
-                    "Search one or more terminologies for a clinical concept. "
-                    "Pass the system URIs you want to search — pick based on clinical context. "
-                    "SNOMED: diagnoses, findings, procedures, specimens, body sites. "
-                    "LOINC: lab tests, vital signs, observations. "
-                    "RxNorm: medications. "
-                    "Omit systems to search SNOMED + LOINC. "
-                    "Returns matching codes with display and system URI."
-                ),
+                "description": "Search terminologies for a clinical concept. Defaults to SNOMED+LOINC.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "description": {"type": "string", "description": "Clinical concept to search for"},
+                        "description": {"type": "string"},
                         "systems": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": (
-                                "Terminology system URIs to search, e.g. "
-                                "[\"http://snomed.info/sct\"], "
-                                "[\"http://loinc.org\"], "
-                                "[\"http://www.nlm.nih.gov/research/umls/rxnorm\"]"
-                            ),
+                            "description": "System URIs: http://snomed.info/sct, http://loinc.org, http://www.nlm.nih.gov/research/umls/rxnorm",
                         },
                     },
                     "required": ["description"],
@@ -269,7 +308,7 @@ class TerminologyTools:
             },
             {
                 "name": "validate_code",
-                "description": "Validate whether a code is valid in a given ValueSet.",
+                "description": "Validate a code against a ValueSet.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -282,15 +321,11 @@ class TerminologyTools:
             },
             {
                 "name": "snomed_ecl",
-                "description": (
-                    "Query SNOMED CT with an ECL expression for precise concept retrieval. "
-                    "Examples: '< 73211009' (subtypes of Diabetes), '< 404684003' (all findings). "
-                    "Prefer this over search_snomed when you need a specific SNOMED subtree."
-                ),
+                "description": "Query SNOMED CT with an ECL expression (e.g. '< 73211009' for diabetes subtypes).",
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "ecl": {"type": "string", "description": "ECL expression"},
+                        "ecl": {"type": "string"},
                         "limit": {"type": "integer", "description": "Max results (default 10)"},
                     },
                     "required": ["ecl"],
